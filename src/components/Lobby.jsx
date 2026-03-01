@@ -116,7 +116,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
             </button>
             
             <div className="flex gap-2">
-              <input type="text" maxLength={4} value={joinRoomId} onChange={e => setJoinRoomId(e.target.value.toUpperCase())} className="w-1/2 bg-slate-900 border border-slate-600 rounded-lg py-3 px-4 text-white text-center tracking-widest font-mono outline-none focus:border-emerald-500" placeholder="4位私密房间号" />
+              <input type="text" maxLength={4} value={joinRoomId} onChange={e => setJoinRoomId(e.target.value.toUpperCase())} className="w-1/2 bg-slate-900 border border-slate-600 rounded-lg py-3 px-4 text-white text-center tracking-widest font-mono outline-none focus:border-emerald-500" placeholder="4位房间号" />
               <button onClick={() => handleAction(onJoinRoom, playerName, joinRoomId)} className="w-1/2 flex items-center justify-center gap-1 bg-slate-700 hover:bg-slate-600 transition rounded-lg font-bold py-3">
                 <Search size={18} /> 搜索加入
               </button>

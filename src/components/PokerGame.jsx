@@ -819,7 +819,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                     {/* 恢复原有：房主皇冠、庄家标识、思考倒计时 */}
                     {roomData.hostUid === p.uid && <div className="absolute -top-3 left-2 bg-slate-900 rounded-full p-1 border border-slate-700 z-10"><Crown size={16} className="text-amber-400" /></div>}
                     {isDealer && <div className="absolute -top-3 right-2 bg-white text-black text-[12px] w-6 h-6 rounded-full flex items-center justify-center font-black shadow-lg border-2 border-slate-900 z-10">D</div>}
-                    {isTurn && timeLeft > 0 && <div className={`absolute -top-10 font-mono text-lg font-bold flex items-center gap-1 ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}><Timer size={18}/> {timeLeft}s</div>}
+                    {isTurn && timeLeft > 0 && roomData?.settings?.timeLimit !== '无限' && <div className={`absolute -top-10 font-mono text-lg font-bold flex items-center gap-1 ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}><Timer size={18}/> {timeLeft}s</div>}
 
                     {/* 修改点 2.1：正常的下注气泡（去掉 animate-bounce 转为静止） */}
                     {roomData.status !== 'waiting' && roomData.status !== 'showdown' && p.bet > 0 && !p.folded && (
@@ -891,7 +891,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
               {isHost && <div className="absolute -top-4 left-6 bg-slate-900 rounded-full p-1.5 border border-slate-700 z-10"><Crown size={20} className="text-amber-400" /></div>}
               {roomData.dealerIndex === roomData.players.findIndex(p => p.uid === user.uid) && <div className="absolute -top-3 left-16 bg-white text-black text-[12px] w-6 h-6 rounded-full flex items-center justify-center font-black shadow-lg border-2 border-slate-900 z-10">D</div>}
               
-              {isMyTurn && timeLeft > 0 && <div className={`absolute -top-10 left-1/2 transform -translate-x-1/2 font-mono text-2xl font-black flex items-center gap-2 ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}><Timer size={24}/> {timeLeft}s</div>}
+              {isMyTurn && timeLeft > 0 && roomData?.settings?.timeLimit !== '无限' && <div className={`absolute -top-10 left-1/2 transform -translate-x-1/2 font-mono text-2xl font-black flex items-center gap-2 ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}><Timer size={24}/> {timeLeft}s</div>}
 
               <div className="flex items-center gap-6 min-w-max pt-2">
                 <div className="flex gap-2 relative">
