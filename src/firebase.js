@@ -3,12 +3,12 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const myFirebaseConfig = {
-  apiKey: "AIzaSyDY7KY1Vr6Yjpt7zfGZUI8dtZ0LQSnqZ1k",
-  authDomain: "mypoker-e6f9c.firebaseapp.com",
-  projectId: "mypoker-e6f9c",
-  storageBucket: "mypoker-e6f9c.firebasestorage.app",
-  messagingSenderId: "1055829737763",
-  appId: "1:1055829737763:web:59009bebb4331e3a550c96"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 let appInstance, authInstance, dbInstance;

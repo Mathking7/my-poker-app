@@ -12,6 +12,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [topUpAmount, setTopUpAmount] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [currentShowIndex, setCurrentShowIndex] = useState(-1);
+  const [showdownFinished, setShowdownFinished] = useState(false);
+  const [isLogOpen, setIsLogOpen] = useState(false);
   
   // 日志自动滚动 Ref
   const logsEndRef = useRef(null);
@@ -21,6 +24,14 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const isHost = roomData?.hostUid === user?.uid && user?.uid != null;
   const isCreator = roomData?.creatorUid === user?.uid; 
   const isPendingApproval = !roomData?.isPublic && !myPlayerInfo && roomData?.joinRequests?.some(r => r.uid === user?.uid);
+
+  // ==== 动态裁判机制 ====
+  // 找出当前轮到谁操作
+  const currentPlayerUid = roomData?.players[roomData?.turnIndex]?.uid;
+  // 推选裁判：按数组顺序，找出除了当前玩家之外，第一个在座的玩家
+  const designatedReferee = roomData?.players.find(p => p.uid !== currentPlayerUid && !p.isSittingOut);
+  // 判断当前正在运行代码的你，是不是被选中的裁判
+  const isReferee = user?.uid === designatedReferee?.uid;
 
   // 加注计算
   let callAmount = 0, maxBet = 0, minRaiseTarget = 0, potAfterCall = 0;
@@ -39,25 +50,44 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     return null;
   }, [myPlayerInfo?.hand, roomData?.communityCards, roomData?.status]);
 
-  // ==== 1. 倒计时功能 (自动过牌/弃牌) ====
+  // 提取到顶层的自身获胜高亮状态
+  const myIsWinnerGlow = roomData?.status === 'showdown' && showdownFinished && myPlayerInfo?.winAmount > 0;
+
+  // ==== 1. 倒计时功能 (自动过牌/弃牌 & 掉线保护) ====
   useEffect(() => {
-    if (roomData?.status === 'waiting' || roomData?.status === 'showdown' || roomData?.isPaused) return;
-    if (roomData?.settings?.timeLimit === '无限') return;
+    // === 修改点 1：各种不需要计时的情况，必须显式清零 timeLeft ===
+    if (roomData?.status === 'waiting' || roomData?.status === 'showdown' || roomData?.isPaused) {
+      setTimeLeft(0);
+      return;
+    }
+    if (roomData?.settings?.timeLimit === '无限') {
+      setTimeLeft(0); 
+      return;
+    }
 
     setTimeLeft(roomData.settings.timeLimit);
     const timerId = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
-          if (isMyTurn) handleAction(callAmount === 0 ? 'call' : 'fold'); 
-          return 0;
+          // 双重保险机制
+          if (isMyTurn) {
+            // 本人在线：由本人客户端触发正常逻辑
+            handleAction(callAmount === 0 ? 'call' : 'fold'); 
+          } else if (isReferee) {
+            // 本人掉线：由裁判的客户端充当服务器，强行执行超时逻辑
+            handleTimeoutForceAction();
+          }
+          return 0; // 倒计时归零
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(timerId);
-  }, [roomData?.turnIndex, roomData?.status, roomData?.isPaused, isMyTurn, callAmount]);
+    
+    // === 补全依赖项，确保设置改变或房主转移时逻辑正确更新 ===
+  }, [roomData?.turnIndex, roomData?.status, roomData?.isPaused, isMyTurn, callAmount, roomData?.settings?.timeLimit, isReferee]);
 
-  // ==== 2. 自动开局逻辑 (5秒轮转) ====
+  // ==== 2. 自动开局逻辑 (动态轮转) ====
   useEffect(() => {
     let timeoutId;
     const seatedPlayers = roomData?.players.filter(p => !p.isSittingOut).length;
@@ -65,7 +95,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     if (roomData?.status === 'showdown' && !roomData.isPaused && seatedPlayers >= 2) {
       const managerUid = roomData.hostUid || roomData.creatorUid || roomData.players[0]?.uid;
       if (user.uid === managerUid) {
-        timeoutId = setTimeout(() => startGame(), 5000);
+        // 计算最大明牌序号
+        const maxSeq = Math.max(...(roomData.players.map(p => p.showSequence ?? -1)));
+        // 动画时间 = 每个人2秒 + 核心3秒等待
+        const delay = (maxSeq >= 0 ? (maxSeq + 1) * 2000 : 0) + 3000;
+        timeoutId = setTimeout(() => startGame(), delay);
       }
     }
     return () => clearTimeout(timeoutId);
@@ -126,6 +160,45 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     return newLogs;
   };
 
+  // ==== 新增：明牌动画播放器 ====
+  useEffect(() => {
+    if (roomData?.status === 'showdown') {
+      const maxSeq = Math.max(...(roomData.players.map(p => p.showSequence ?? -1)));
+      if (maxSeq >= 0) {
+        let step = 0;
+        setCurrentShowIndex(0);
+        const timer = setInterval(() => {
+          step++;
+          if (step > maxSeq) {
+            clearInterval(timer);
+            setShowdownFinished(true); // 所有人明牌完毕，展示最终胜者
+            setCurrentShowIndex(-1);
+          } else {
+            setCurrentShowIndex(step);
+          }
+        }, 2000); // 间隔 2s
+        return () => clearInterval(timer);
+      } else {
+        setShowdownFinished(true); // 如果没人需要明牌（比如全弃牌），直接跳过
+      }
+    } else {
+      setCurrentShowIndex(-1);
+      setShowdownFinished(false);
+    }
+  }, [roomData?.status, roomData?.handCount]);
+
+  // ==== 新增：提取当前应当高光的牌 ====
+  const activeHighlights = React.useMemo(() => {
+    if (roomData?.status !== 'showdown') return myCurrentHandInfo?.highlightCards || [];
+    if (!showdownFinished) {
+      // 动画期间，高光当前正在明牌的人的牌
+      const showingPlayer = roomData?.players.find(p => p.showSequence === currentShowIndex);
+      return showingPlayer?.highlightCards || [];
+    }
+    // 动画结束，高光所有胜者的牌
+    return roomData?.players.filter(p => p.winAmount > 0).flatMap(p => p.highlightCards || []);
+  }, [roomData?.status, roomData?.players, currentShowIndex, showdownFinished, myCurrentHandInfo]);
+
   // ---------------- 房间管理操作 ----------------
   const handleApproveJoin = async (reqUid, reqName, approve) => {
     if (!isHost) return;
@@ -175,6 +248,62 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     setShowSettingsModal(false);
   };
 
+  const handleResetGame = async () => {
+    if (!isHost) return;
+    if (!window.confirm('确定要重置对局吗？所有玩家的筹码将恢复为初始状态，当前牌局将被强制中止。')) return;
+    
+    let nextData = JSON.parse(JSON.stringify(roomData));
+    
+    // 应用新设置
+    nextData.settings = localSettings;
+    
+    // 重置牌桌全局状态
+    nextData.status = 'waiting';
+    nextData.pot = 0;
+    nextData.currentBet = 0;
+    nextData.communityCards = [];
+    nextData.deck = [];
+    nextData.handCount = 0;
+    nextData.lastAggressorUid = null;
+    
+    // 重置所有玩家状态与筹码
+    nextData.players = nextData.players.map(p => ({
+      ...p,
+      chips: localSettings.initialChips, // 恢复为设置的初始筹码
+      hand: [],
+      bet: 0,
+      folded: false,
+      allIn: false,
+      hasActed: false,
+      lastAction: null,
+      rankName: null,
+      showCards: false,
+      showSequence: -1,
+      highlightCards: [],
+      winAmount: 0,
+      totalContribution: 0
+    }));
+    
+    nextData.logs = addLog(nextData, '⚠️ 房主中止并重置了对局，所有玩家筹码已恢复初始值。');
+    
+    await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextData);
+    setShowSettingsModal(false);
+  };
+
+  const handleDestroyRoom = async () => {
+    if (!isHost) return;
+    if (!window.confirm('确定要解散房间吗？此操作不可逆，所有人将被移出房间。')) return;
+    
+    try {
+      await deleteDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId));
+      setShowSettingsModal(false);
+      onLeaveRoom(); // 调用传入的退出函数，返回大厅
+    } catch (err) {
+      console.error("解散房间失败", err);
+      alert("解散房间失败，请重试");
+    }
+  };
+
   const handlePlayerActionMenu = async (actionType) => {
     if (!isHost || !selectedPlayer) return;
     let nextData = JSON.parse(JSON.stringify(roomData));
@@ -184,9 +313,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       if (nextData.status !== 'waiting' && nextData.players[nextData.turnIndex]?.uid === selectedPlayer.uid) nextData.players.forEach(p => p.hasActed = false);
     } 
     else if (actionType === 'transfer') nextData.hostUid = selectedPlayer.uid;
-    else if (actionType === 'topup') {
-      nextData.players.find(p => p.uid === selectedPlayer.uid).chips += topUpAmount;
-      nextData.logs = addLog(nextData, `💰 房主为 ${selectedPlayer.name} 补充了 ${topUpAmount} 筹码。`);
+    else if (actionType === 'setChips') {
+      const targetPlayer = nextData.players.find(p => p.uid === selectedPlayer.uid);
+      const oldChips = targetPlayer.chips;
+      targetPlayer.chips = Math.max(0, topUpAmount); // 确保不能改为负数
+      nextData.logs = addLog(nextData, `💰 房主将 ${selectedPlayer.name} 的筹码从 ${oldChips} 修改为 ${targetPlayer.chips}。`);
     }
     await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextData);
     setSelectedPlayer(null);
@@ -295,11 +426,30 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
     // 1. 唯一结算入口：当状态为 showdown 时执行
     if (nextState.status === 'showdown') {
+      
+      // === 核心修复 1：强力兜底 ===
+      // 在结算开始前，确保所有玩家（包括已弃牌的玩家）都有合法的动效字段
+      // 绝对防止 Firebase 抛出 "Unsupported field value: undefined" 崩溃
+      nextState.players.forEach(p => {
+        p.winAmount = 0;
+        p.showCards = p.showCards || false;
+        p.showSequence = p.showSequence || -1;
+        p.highlightCards = p.highlightCards || [];
+        p.rankName = p.rankName || '';
+      });
+
       const baseContenders = nextState.players
         .filter(p => !p.folded)
         .map(p => {
-          const { score, rankName } = evaluate7Cards(p.hand, nextState.communityCards);
-          return { ...p, _score: score, _rankName: rankName, winAmount: 0 };
+          // 增加对 hand 的空数组兜底，防止极度异常情况下的解析报错
+          const { score, rankName, highlightCards } = evaluate7Cards(p.hand || [], nextState.communityCards || []);
+          return { 
+            ...p, 
+            _score: score, 
+            _rankName: rankName || '', 
+            _highlightCards: highlightCards || [],
+            winAmount: 0 
+          };
         });
       
       // 正规开牌 (Auto-Muck) 逻辑
@@ -317,7 +467,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       
       // 规则 B：如果河牌圈大家都是 Check 过牌（没有加注者），从小盲位（庄家下一位）开始
       if (startIndex === -1) {
-         startIndex = (nextState.dealerIndex + 1) % playerCount;
+         // 兜底处理：防止由于首局没有庄家导致 dealerIndex 异常引发的 NaN 崩溃
+         const dIndex = Number.isInteger(nextState.dealerIndex) ? nextState.dealerIndex : 0;
+         startIndex = (dIndex + 1) % playerCount;
       }
 
       // === 按真实顺时针顺序排列参与比牌的玩家 ===
@@ -333,21 +485,24 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       // === 正规开牌 (Auto-Muck) 执行 ===
       const isAllInShowdown = orderedContenders.some(c => c.allIn);
       let currentBestScore = -1;
+      let seq = 0; // 动画播放顺位
 
       orderedContenders.forEach(c => {
         const pIndex = nextState.players.findIndex(p => p.uid === c.uid);
-        nextState.players[pIndex].rankName = c._rankName; // 保存牌型
+        nextState.players[pIndex].rankName = c._rankName; 
+        nextState.players[pIndex].highlightCards = c._highlightCards; 
         
-        // 如果有 All-in 或牌力 >= 当前桌上最大牌力，则亮牌
         if (isAllInShowdown || c._score >= currentBestScore) {
           nextState.players[pIndex].showCards = true;
+          nextState.players[pIndex].showSequence = seq++; // 赋给序号并累加
           currentBestScore = Math.max(currentBestScore, c._score);
         } else {
-          nextState.players[pIndex].showCards = false; // 自动盖牌 (Muck)
+          nextState.players[pIndex].showCards = false; 
+          nextState.players[pIndex].showSequence = -1; 
         }
       });
 
-      const contenders = baseContenders; // 将排好序的结果交接回原有的 contenders 变量，确保分池逻辑不受影响
+      const contenders = baseContenders; // 将排好序的结果交接回原有的 contenders 变量
       
       const contributionMap = {};
       nextState.players.forEach(p => { contributionMap[p.uid] = p.totalContribution || 0; });
@@ -386,6 +541,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         if (c.winAmount > 0) {
           const pIndex = nextState.players.findIndex(p => p.uid === c.uid);
           nextState.players[pIndex].chips += c.winAmount;
+          
+          // === 核心修复 2：将结算金额写入玩家全局状态 ===
+          // 这一步决定了前台 UI 究竟能不能让胜者边框发光！
+          nextState.players[pIndex].winAmount = c.winAmount;
+          
           winLogs.push(`【${c.name}】(${c._rankName}) 赢得了 ${c.winAmount}`);
         }
       });
@@ -403,8 +563,18 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     if (activeContenders.length === 1) {
       const winner = activeContenders[0];
       const totalWon = nextState.pot;
+      
+      // 强力清理所有人的状态，确保完全跳过明牌动画，直接进入 3 秒获胜高光
+      nextState.players.forEach(p => {
+        p.winAmount = 0;
+        p.showCards = false;
+        p.showSequence = -1; // 强制设为 -1，使得前端 maxSeq 变为 -1
+        p.highlightCards = [];
+      });
+      
+      winner.winAmount = totalWon; 
       winner.chips += totalWon;
-      winner.showCards = false;
+      
       nextState.logs = addLog(nextState, `🏆 玩家【${winner.name}】获胜，赢得底池 ${totalWon}！`);
       
       nextState.status = 'showdown';
@@ -412,7 +582,6 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       nextState.currentBet = 0;
       nextState.players.forEach(p => { p.bet = 0; p.hasActed = false; p.lastAction = null; p.totalContribution = 0; });
 
-      // 关键：删除递归调用，直接保存并退出
       await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextState);
       return;
     }
@@ -526,6 +695,33 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     await advanceGameState(nextState);
   };
 
+  // ==== 房主处理掉线/挂机玩家的强制超时逻辑 (防卡死机制) ====
+  const handleTimeoutForceAction = async () => {
+    // 只有房主有权限当裁判，并且游戏必须在进行中
+    if (!isReferee || !roomData || roomData.status === 'waiting' || roomData.status === 'showdown') return;
+    
+    let nextState = JSON.parse(JSON.stringify(roomData));
+    const targetIndex = nextState.turnIndex;
+    const targetPlayer = nextState.players[targetIndex];
+    
+    // 如果目标玩家已经弃牌或全下，不需要操作
+    if (!targetPlayer || targetPlayer.folded || targetPlayer.allIn) return;
+
+    const reqCall = nextState.currentBet - targetPlayer.bet;
+    
+    if (reqCall === 0) {
+      targetPlayer.lastAction = 'check';
+      nextState.logs = addLog(nextState, `⏱️ ${targetPlayer.name} 超时/掉线，系统自动看牌`);
+    } else {
+      targetPlayer.folded = true;
+      targetPlayer.lastAction = 'fold';
+      nextState.logs = addLog(nextState, `⏱️ ${targetPlayer.name} 超时/掉线，系统自动弃牌`);
+    }
+    
+    targetPlayer.hasActed = true;
+    await advanceGameState(nextState); // 推进游戏状态
+  };
+
   const getActionColor = (action) => {
     if (action === 'allin') return 'bg-rose-600 text-white border-rose-400';
     if (action === 'raise') return 'bg-amber-400 text-amber-950 border-amber-200';
@@ -544,9 +740,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
           </div>
           {roomData.isPublic === false && <span className="text-xs bg-rose-900 text-rose-300 px-2 py-1 rounded border border-rose-700">私密</span>}
           
-          <div className="hidden md:flex items-center gap-3 ml-4 bg-slate-900/50 px-3 py-1 rounded-full border border-slate-700 text-sm">
-            <span>当前盲注: <span className="text-amber-400 font-bold">{Math.min(10 * Math.pow(2, Math.floor(((roomData.handCount||1) - 1) / 5)), 10)} / {Math.min(20 * Math.pow(2, Math.floor(((roomData.handCount||1) - 1) / 5)), 20)}</span></span>
-            {roomData.settings.doubleBlinds && <span className="text-slate-400 text-xs">(局数 {((roomData.handCount||1)-1)%5 + 1}/5)</span>}
+          <div className="hidden md:flex items-center gap-3 ml-4 bg-slate-900/50 px-3 py-1 rounded-full border border-slate-700 text-sm z-30">
+            <span>当前盲注: <span className="text-amber-400 font-bold">
+              {roomData.settings.doubleBlinds ? 10 * Math.pow(2, Math.floor(((roomData.handCount||1) - 1) / 5)) : 10} / {roomData.settings.doubleBlinds ? 20 * Math.pow(2, Math.floor(((roomData.handCount||1) - 1) / 5)) : 20}
+            </span></span>
+            {roomData.settings.doubleBlinds && <span className="text-slate-400 text-xs ml-1"> (局数 {((roomData.handCount||1)-1)%5 + 1}/5)</span>}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -581,6 +779,17 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
           
           {roomData.isPaused && <div className="absolute inset-0 bg-black/40 z-10 flex items-center justify-center backdrop-blur-sm pointer-events-none"><h1 className="text-5xl font-black text-white tracking-widest drop-shadow-lg">对局已暂停</h1></div>}
 
+          {/* ==== 新增：悬浮的“打开日志”按钮 ==== */}
+          {!isLogOpen && (
+            <button 
+              onClick={() => setIsLogOpen(true)}
+              className="absolute right-4 top-4 bg-slate-800/80 backdrop-blur border border-slate-600 p-2 md:px-4 md:py-2 rounded-full shadow-lg z-30 flex items-center gap-2 text-slate-300 hover:text-white hover:border-emerald-400 transition"
+            >
+              <Users size={18} className="text-emerald-400"/>
+              <span className="hidden md:inline font-bold text-sm">对局动态</span>
+            </button>
+          )}
+
           {/* 顶部: 对手与桌面 (可滚动区域) */}
           <div className="flex-1 overflow-y-auto flex flex-col p-4">
             {/* 对手头像 */}
@@ -589,26 +798,59 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                 if (p.uid === user.uid) return null;
                 const isTurn = roomData.status !== 'waiting' && roomData.status !== 'showdown' && roomData.turnIndex === idx && !roomData.isPaused;
                 const isDealer = roomData.dealerIndex === idx;
+                
+                // ==== 新增特效判定 ====
+                // 是否到了他明牌的时刻
+                const isRevealed = roomData.status === 'showdown' && p.showCards && (showdownFinished || p.showSequence <= currentShowIndex);
+                // 是否是结算完毕后的胜者
+                const isWinnerGlow = roomData.status === 'showdown' && showdownFinished && p.winAmount > 0;
+
                 return (
-                  <div key={p.uid} onClick={() => { if (isHost) { setSelectedPlayer(p); setTopUpAmount(Math.floor(roomData.settings.initialChips / 2)); } }} className={`relative bg-slate-800/80 backdrop-blur rounded-xl p-3 border-2 w-32 md:w-40 flex flex-col items-center shadow-xl ${isHost ? 'cursor-pointer hover:border-blue-400' : ''} ${isTurn ? 'border-amber-400 shadow-amber-400/20' : 'border-slate-600'} ${p.folded ? 'opacity-50' : ''}`}>
+                  <div 
+                    key={p.uid} 
+                    // 恢复原有：房主点击弹窗管理玩家功能
+                    onClick={() => { if (isHost) { setSelectedPlayer(p); setTopUpAmount(p.chips); } }}
+                    // 恢复原有：基础样式，并叠加新的胜者高光样式
+                    className={`relative bg-slate-800/80 backdrop-blur rounded-xl p-3 border-2 w-32 md:w-40 flex flex-col items-center shadow-xl transition-all duration-500
+                      ${isHost ? 'cursor-pointer hover:border-blue-400' : ''} 
+                      ${isWinnerGlow ? 'border-amber-400 shadow-[0_0_25px_rgba(251,191,36,0.8)] scale-105 z-20' : (isTurn ? 'border-amber-400 shadow-amber-400/20' : 'border-slate-600')} 
+                      ${p.folded ? 'opacity-50' : ''}`}
+                  >
+                    {/* 恢复原有：房主皇冠、庄家标识、思考倒计时 */}
                     {roomData.hostUid === p.uid && <div className="absolute -top-3 left-2 bg-slate-900 rounded-full p-1 border border-slate-700 z-10"><Crown size={16} className="text-amber-400" /></div>}
                     {isDealer && <div className="absolute -top-3 right-2 bg-white text-black text-[12px] w-6 h-6 rounded-full flex items-center justify-center font-black shadow-lg border-2 border-slate-900 z-10">D</div>}
                     {isTurn && timeLeft > 0 && <div className={`absolute -top-10 font-mono text-lg font-bold flex items-center gap-1 ${timeLeft <= 10 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}><Timer size={18}/> {timeLeft}s</div>}
 
-                    {roomData.status !== 'waiting' && p.bet > 0 && !p.folded && (
-                      <div className={`absolute -right-6 top-1/4 font-black px-3 py-1 rounded-full shadow-lg border-2 z-20 text-sm flex items-center gap-1 animate-bounce ${getActionColor(p.lastAction)}`}>
+                    {/* 修改点 2.1：正常的下注气泡（去掉 animate-bounce 转为静止） */}
+                    {roomData.status !== 'waiting' && roomData.status !== 'showdown' && p.bet > 0 && !p.folded && (
+                      <div className={`absolute -bottom-12 left-1/2 transform -translate-x-1/2 font-black px-4 py-1.5 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.5)] border-2 z-40 text-sm flex items-center gap-1 transition-all ${getActionColor(p.lastAction)}`}>
                         <Coins size={14} /> {p.bet}
                       </div>
                     )}
 
+                    {/* 修改点 2.2：结算获胜时，在原位置显示金色的 +金额 气泡 */}
+                    {isWinnerGlow && (
+                      <div className="absolute -bottom-12 left-1/2 transform -translate-x-1/2 font-black px-4 py-1.5 rounded-full shadow-[0_5px_15px_rgba(251,191,36,0.6)] border-2 border-amber-300 bg-amber-500 text-white z-50 text-sm flex items-center gap-1 transition-all scale-110">
+                        <Coins size={14} /> +{p.winAmount}
+                      </div>
+                    )}
+
+                    {/* 恢复原有：玩家姓名与码量显示 */}
                     <div className="font-bold truncate w-full text-center relative pt-1 text-slate-200">{p.name} {p.isSittingOut && '(观战)'}</div>
                     <div className="text-emerald-400 text-sm mt-1 font-mono">💰 {p.chips}</div>
                     
+                    {/* 新增：结合了高光与顺序开牌的手牌区 */}
                     <div className="flex gap-1 mt-3 mb-1 relative">
-                      {/* 结算阶段只有 showCards 为 true 才翻开牌面 */}
-                      {p.hand && p.hand.length > 0 ? (roomData.status === 'showdown' && p.showCards ? p.hand.map((c, i) => <CardUI key={i} card={c} />) : <><CardUI hidden /><CardUI hidden /></>) : <div className="h-16 text-xs text-slate-500 flex items-center">等待发牌</div>}
-                      {/* 结算阶段只有 showCards 为 true 的人才显示结算牌型 */}
-                      {roomData.status === 'showdown' && p.showCards && p.rankName && <div className="absolute -bottom-3 w-full text-center bg-indigo-900 text-white text-xs py-0.5 rounded-full shadow border border-indigo-400 z-20">{p.rankName}</div>}
+                      {p.hand && p.hand.length > 0 ? (
+                         isRevealed ? p.hand.map((c, i) => <CardUI key={i} card={c} highlight={activeHighlights?.includes(c)} />) : <><CardUI hidden /><CardUI hidden /></>
+                      ) : <div className="h-16 text-xs text-slate-500 flex items-center">等待发牌</div>}
+                      
+                      {/* 明牌时展示牌型标签 */}
+                      {isRevealed && p.rankName && (
+                        <div className="absolute -bottom-3 w-full text-center bg-indigo-900 text-white text-xs py-0.5 rounded-full shadow border border-indigo-400 z-20 animate-bounce">
+                          {p.rankName}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -633,7 +875,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                     <span className="text-4xl font-black text-amber-400 flex items-center gap-2"><Coins size={28}/> {roomData.pot}</span>
                   </div>
                   <div className="flex justify-center gap-2 md:gap-4 h-24">
-                    {[0, 1, 2, 3, 4].map(i => <CardUI key={i} card={roomData.communityCards[i]} />)}
+                    {[0, 1, 2, 3, 4].map(i => <CardUI key={i} card={roomData.communityCards[i]} highlight={activeHighlights.includes(roomData.communityCards[i])}/>)}
                   </div>
                 </div>
               )}
@@ -642,7 +884,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
           {/* 底部: 玩家本人操作面板 (固定位置) */}
           {myPlayerInfo ? (
-            <div className={`flex-none relative bg-slate-800 rounded-t-2xl border-t-4 p-4 md:p-6 flex flex-col md:flex-row items-center gap-6 shadow-[0_-10px_25px_rgba(0,0,0,0.3)] z-0 ${isMyTurn ? 'border-amber-400' : 'border-slate-700'} ${myPlayerInfo.isSittingOut ? 'opacity-70' : ''}`}>
+            <div className={`flex-none relative bg-slate-800 rounded-t-2xl border-t-4 p-4 md:p-6 flex flex-col md:flex-row items-center gap-6 z-0 transition-all duration-500 
+              ${myIsWinnerGlow ? 'border-amber-400 shadow-[0_-10px_35px_rgba(251,191,36,0.5)] bg-slate-800/90' : (isMyTurn ? 'border-amber-400 shadow-[0_-10px_25px_rgba(0,0,0,0.3)]' : 'border-slate-700 shadow-[0_-10px_25px_rgba(0,0,0,0.3)]')} 
+              ${myPlayerInfo.isSittingOut ? 'opacity-70' : ''}`}>
               
               {isHost && <div className="absolute -top-4 left-6 bg-slate-900 rounded-full p-1.5 border border-slate-700 z-10"><Crown size={20} className="text-amber-400" /></div>}
               {roomData.dealerIndex === roomData.players.findIndex(p => p.uid === user.uid) && <div className="absolute -top-3 left-16 bg-white text-black text-[12px] w-6 h-6 rounded-full flex items-center justify-center font-black shadow-lg border-2 border-slate-900 z-10">D</div>}
@@ -651,23 +895,52 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
               <div className="flex items-center gap-6 min-w-max pt-2">
                 <div className="flex gap-2 relative">
-                  {myPlayerInfo.hand && myPlayerInfo.hand.length > 0 ? myPlayerInfo.hand.map((c, i) => <CardUI key={i} card={c} />) : <><CardUI /><CardUI /></>}
-
-                  {/* 使用 myCurrentHandInfo 实时显示自己当前的牌型，不再局限于 showdown 阶段 */}
-                  {myPlayerInfo.hand && myPlayerInfo.hand.length > 0 && !myPlayerInfo.folded && myCurrentHandInfo?.rankName && (
-                    <div className="absolute -bottom-3 w-full text-center bg-indigo-900 text-white text-sm py-0.5 rounded-full shadow border border-indigo-400 z-20 font-bold">
-                      {myCurrentHandInfo.rankName}
+                  {myPlayerInfo.hand && myPlayerInfo.hand.length > 0 
+                    ? myPlayerInfo.hand.map((c, i) => <CardUI key={i} card={c} highlight={activeHighlights?.includes(c)} />) 
+                    : <><CardUI /><CardUI /></>}
+                  
+                  {/* 自己的正常下注气泡（去掉 animate-bounce 转为静止） */}
+                  {roomData.status !== 'waiting' && roomData.status !== 'showdown' && myPlayerInfo.bet > 0 && !myPlayerInfo.folded && (
+                    <div className={`absolute -top-16 left-1/2 transform -translate-x-1/2 font-black px-5 py-2 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.5)] border-2 z-40 text-base flex items-center gap-1 transition-all ${getActionColor(myPlayerInfo.lastAction)}`}>
+                      <Coins size={18} /> {myPlayerInfo.bet}
                     </div>
                   )}
 
-                  {roomData.status !== 'waiting' && myPlayerInfo.bet > 0 && (
-                    <div className={`absolute -top-6 -right-8 font-black px-4 py-1.5 rounded-full shadow-lg border-2 text-sm flex items-center gap-1 z-20 ${getActionColor(myPlayerInfo.lastAction)}`}>
-                      <Coins size={16} /> {myPlayerInfo.bet}
+                  {/* 自己的结算获胜显示（去除了匿名函数闭包后，直接读取顶层的 myIsWinnerGlow） */}
+                  {myIsWinnerGlow && (
+                    <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 font-black px-5 py-2 rounded-full shadow-[0_5px_25px_rgba(251,191,36,0.8)] border-2 border-amber-300 bg-amber-500 text-white z-50 text-xl flex items-center gap-1 transition-all scale-110">
+                      <Coins size={20} /> +{myPlayerInfo.winAmount}
+                    </div>
+                  )}
+
+                  {/* 自己的实时牌型与结算牌型合并逻辑 */}
+                  {myPlayerInfo.hand && myPlayerInfo.hand.length > 0 && !myPlayerInfo.folded && myCurrentHandInfo?.rankName && (
+                    <div className="absolute -bottom-3 w-full text-center bg-indigo-900 text-white text-sm py-0.5 rounded-full shadow border border-indigo-400 z-20 font-bold">
+                      {roomData.status === 'showdown' ? myPlayerInfo.rankName : myCurrentHandInfo.rankName}
+                    </div>
+                  )}
+
+                  {/* 明牌标识 */}
+                  {roomData.status === 'showdown' && myPlayerInfo.showCards && (showdownFinished || myPlayerInfo.showSequence <= currentShowIndex) && (
+                    <div className="absolute -top-4 -right-4 bg-emerald-500 text-white text-xs font-black px-2 py-1 rounded-md shadow-lg border border-emerald-300 transform rotate-12 z-30">
+                      已亮牌
                     </div>
                   )}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-bold text-xl text-white">{myPlayerInfo.name} {myPlayerInfo.folded && <span className="text-rose-400 text-sm">(已弃牌)</span>}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-xl text-white">{myPlayerInfo.name} {myPlayerInfo.folded && <span className="text-rose-400 text-sm">(已弃牌)</span>}</span>
+                    {/* 房主管理自己的按钮 */}
+                    {isHost && (
+                      <button 
+                        onClick={() => { setSelectedPlayer(myPlayerInfo); setTopUpAmount(myPlayerInfo.chips); }} 
+                        className="text-slate-400 hover:text-amber-400 transition" 
+                        title="修改自己的筹码"
+                      >
+                        <Settings size={18} />
+                      </button>
+                    )}
+                  </div>
                   <span className="text-emerald-400 font-mono text-xl mt-1">💰 {myPlayerInfo.chips}</span>
                   <button onClick={handleToggleSit} className="mt-2 flex items-center gap-1 text-xs bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 w-fit transition">
                     {myPlayerInfo.isSittingOut ? <><UserCheck size={14}/> 坐下参与</> : <><UserMinus size={14}/> 站起观战</>}
@@ -708,11 +981,17 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
               {isPendingApproval ? <span className="flex items-center gap-2"><ShieldAlert size={18} className="text-amber-500" /> 等待房主审核加入...</span> : "观战中..."}
             </div>
           )}
+        
         </div>
 
-        {/* 右侧日志区 (限制最大高度或充满剩余空间) */}
-        <div className="w-full md:w-80 bg-slate-900 border-l border-slate-800 flex flex-col h-64 md:h-full z-10 flex-shrink-0">
-          <div className="bg-slate-800 p-4 font-bold text-sm border-b border-slate-700 flex items-center gap-2 shadow-sm"><Users size={16} className="text-emerald-400"/> 对局动态</div>
+        {/* ==== 修改：侧滑出式“对局动态”抽屉 ==== */}
+        <div className={`fixed inset-y-0 right-0 w-80 bg-slate-900/95 backdrop-blur-md border-l border-slate-700 shadow-[0_0_50px_rgba(0,0,0,0.8)] z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${isLogOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+          <div className="bg-slate-800 p-4 font-bold text-sm border-b border-slate-700 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2"><Users size={16} className="text-emerald-400"/> 对局动态</div>
+            {/* 新增关闭按钮 */}
+            <button onClick={() => setIsLogOpen(false)} className="text-slate-400 hover:text-rose-400 transition p-1"><X size={20}/></button>
+          </div>
+          
           {/* 日志内容滚动区 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-2 font-mono text-sm leading-relaxed scroll-smooth" id="game-logs">
             {roomData.logs.map((log, idx) => (
@@ -728,6 +1007,15 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
             <div ref={logsEndRef} /> {/* 用于自动滚动到底部的锚点 */}
           </div>
         </div>
+
+        {/* 移动端/小屏幕下的背景遮罩 (点击遮罩即可关闭抽屉) */}
+        {isLogOpen && (
+          <div 
+            className="fixed inset-0 bg-black/40 z-40 backdrop-blur-sm" 
+            onClick={() => setIsLogOpen(false)} 
+          />
+        )}
+
       </div>
 
       {/* 弹窗：全局设置 */}
@@ -760,7 +1048,23 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
               </div>
             </div>
             {isHost && (
-              <div className="p-4 border-t border-slate-700 bg-slate-900/50"><button onClick={handleSaveSettings} className="w-full bg-emerald-600 hover:bg-emerald-500 transition rounded-xl font-bold py-3 shadow-lg">保存设置并应用至下局</button></div>
+              <div className="p-4 border-t border-slate-700 bg-slate-900/50 flex flex-col gap-3">
+                <button onClick={handleSaveSettings} className="w-full bg-emerald-600 hover:bg-emerald-500 transition rounded-xl font-bold py-3 shadow-lg text-white">
+                  保存设置并应用至下局
+                </button>
+                
+                {/* 判定为私密房间时，额外显示高权限管理按钮 */}
+                {roomData.isPublic === false && (
+                  <>
+                    <button onClick={handleResetGame} className="w-full bg-amber-600 hover:bg-amber-500 transition rounded-xl font-bold py-3 shadow-lg text-white">
+                      保存设置并重置对局
+                    </button>
+                    <button onClick={handleDestroyRoom} className="w-full bg-rose-700 hover:bg-rose-600 transition rounded-xl font-bold py-3 shadow-lg text-white">
+                      解散房间
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -770,19 +1074,27 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       {selectedPlayer && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm border border-slate-600 overflow-hidden flex flex-col">
-            <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-900/50"><h2 className="text-lg font-bold text-white flex items-center gap-2"><Crown size={18} className="text-amber-400"/> 管理玩家: {selectedPlayer.name}</h2><button onClick={() => setSelectedPlayer(null)} className="text-slate-400 hover:text-rose-400 transition"><X size={20}/></button></div>
+            <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-900/50">
+              <h2 className="text-lg font-bold text-white flex items-center gap-2"><Crown size={18} className="text-amber-400"/> 管理玩家: {selectedPlayer.name}</h2>
+              <button onClick={() => setSelectedPlayer(null)} className="text-slate-400 hover:text-rose-400 transition"><X size={20}/></button>
+            </div>
             <div className="p-6 space-y-6">
               <div>
-                <label className="block text-sm text-slate-400 mb-2">为该玩家补充筹码</label>
+                <label className="block text-sm text-slate-400 mb-2">设定该玩家筹码</label>
                 <div className="flex gap-2">
-                  <input type="number" value={topUpAmount} onChange={e => setTopUpAmount(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white outline-none focus:border-emerald-500 font-mono" />
-                  <button onClick={() => handlePlayerActionMenu('topup')} className="px-5 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold text-sm whitespace-nowrap shadow">确认补充</button>
+                  <input type="number" min="0" value={topUpAmount} onChange={e => setTopUpAmount(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-white outline-none focus:border-emerald-500 font-mono" />
+                  {/* 修改为 setChips */}
+                  <button onClick={() => handlePlayerActionMenu('setChips')} className="px-5 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold text-sm whitespace-nowrap shadow">确认修改</button>
                 </div>
               </div>
-              <div className="border-t border-slate-700 pt-6 flex gap-3">
-                <button onClick={() => handlePlayerActionMenu('transfer')} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-bold text-sm transition shadow">转让房主</button>
-                <button onClick={() => handlePlayerActionMenu('kick')} className="flex-1 py-3 bg-rose-600 hover:bg-rose-500 rounded-lg font-bold text-sm transition shadow">踢出房间</button>
-              </div>
+              
+              {/* 新增逻辑：如果选中的是自己，则不显示转让和踢出按钮 */}
+              {selectedPlayer.uid !== user.uid && (
+                <div className="border-t border-slate-700 pt-6 flex gap-3">
+                  <button onClick={() => handlePlayerActionMenu('transfer')} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-bold text-sm transition shadow">转让房主</button>
+                  <button onClick={() => handlePlayerActionMenu('kick')} className="flex-1 py-3 bg-rose-600 hover:bg-rose-500 rounded-lg font-bold text-sm transition shadow">踢出房间</button>
+                </div>
+              )}
             </div>
           </div>
         </div>

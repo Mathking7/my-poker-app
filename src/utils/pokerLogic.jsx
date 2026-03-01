@@ -49,14 +49,22 @@ export const evaluate5Cards = (cards) => {
   const countFreq = Object.entries(counts).map(([v, c]) => ({ v: parseInt(v), c })).sort((a, b) => b.c - a.c || b.v - a.v);
 
   let rank = 0;
-  if (isStraight && isFlush) rank = 8;
-  else if (countFreq[0].c === 4) rank = 7;
-  else if (countFreq[0].c === 3 && countFreq[1].c === 2) rank = 6;
-  else if (isFlush) rank = 5;
-  else if (isStraight) rank = 4;
-  else if (countFreq[0].c === 3) rank = 3;
-  else if (countFreq[0].c === 2 && countFreq[1].c === 2) rank = 2;
-  else if (countFreq[0].c === 2) rank = 1;
+  let highlightValues = []; // 记录需要高光的点数
+
+  if (isStraight && isFlush) { rank = 8; highlightValues = values; }
+  else if (countFreq[0].c === 4) { rank = 7; highlightValues = [countFreq[0].v]; }
+  else if (countFreq[0].c === 3 && countFreq[1].c === 2) { rank = 6; highlightValues = [countFreq[0].v, countFreq[1].v]; }
+  else if (isFlush) { rank = 5; highlightValues = values; }
+  else if (isStraight) { rank = 4; highlightValues = values; }
+  else if (countFreq[0].c === 3) { rank = 3; highlightValues = [countFreq[0].v]; }
+  else if (countFreq[0].c === 2 && countFreq[1].c === 2) { rank = 2; highlightValues = [countFreq[0].v, countFreq[1].v]; }
+  else if (countFreq[0].c === 2) { rank = 1; highlightValues = [countFreq[0].v]; }
+
+  // 提取具体的高光牌数组（高牌 rank===0 时为空）
+  let highlightCards = [];
+  if (rank > 0) {
+    highlightCards = cards.filter(c => highlightValues.includes(getRankValue(c)));
+  }
 
   let score = rank * 0x100000;
   if (rank === 8 || rank === 4) {
@@ -70,48 +78,39 @@ export const evaluate5Cards = (cards) => {
       }
     }
   }
-  return { score, rankName: RANK_NAMES[rank] };
+  // 返回 highlightCards
+  return { score, rankName: RANK_NAMES[rank], highlightCards };
 };
 
 export const evaluate7Cards = (holeCards, communityCards) => {
   const allCards = [...holeCards, ...communityCards];
-  if (allCards.length < 5) return { score: 0, rankName: '' };
-
-  // 使用标准的组合生成函数（C(n, 5)），无论 allCards 是 5 张、6 张还是 7 张，都能准确返回所有 5 张牌的组合
+  if (allCards.length < 5) return { score: 0, rankName: '', highlightCards: [] };
+  
   const getCombinations = (cards, k) => {
     const result = [];
     const f = (start, combo) => {
-      if (combo.length === k) {
-        result.push(combo);
-        return;
-      }
-      for (let i = start; i < cards.length; i++) {
-        f(i + 1, [...combo, cards[i]]);
-      }
+      if (combo.length === k) { result.push(combo); return; }
+      for (let i = start; i < cards.length; i++) f(i + 1, [...combo, cards[i]]);
     };
     f(0, []);
     return result;
   };
 
-  // 获取当前所有可能的 5 张牌组合
   const combos = getCombinations(allCards, 5);
+  let bestScore = -1, bestRankName = '', bestHighlightCards = [];
   
-  let bestScore = -1;
-  let bestRankName = '';
-  
-  // 遍历所有 5 张牌组合，找出最大牌力
   for (const fiveCards of combos) {
     const res = evaluate5Cards(fiveCards);
     if (res.score > bestScore) {
       bestScore = res.score;
       bestRankName = res.rankName;
+      bestHighlightCards = res.highlightCards; // 记录最佳高光牌
     }
   }
-  
-  return { score: bestScore, rankName: bestRankName };
+  return { score: bestScore, rankName: bestRankName, highlightCards: bestHighlightCards };
 };
 
-export const CardUI = ({ card, hidden }) => {
+export const CardUI = ({ card, hidden, highlight }) => {
   if (hidden) {
     return (
       <div className="w-12 h-16 md:w-16 md:h-24 bg-blue-600 rounded shadow-md border-2 border-white flex items-center justify-center bg-[repeating-linear-gradient(45deg,transparent,transparent_5px,rgba(255,255,255,0.1)_5px,rgba(255,255,255,0.1)_10px)]">
@@ -125,8 +124,13 @@ export const CardUI = ({ card, hidden }) => {
   const rank = card[1];
   const colorClass = SUIT_COLORS[suit] || 'text-slate-800';
   
+  // 高光样式判定
+  const highlightClass = highlight 
+    ? 'border-4 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.8)] scale-105 z-10 transition-all duration-300' 
+    : 'border border-slate-300';
+  
   return (
-    <div className="w-12 h-16 md:w-16 md:h-24 bg-white rounded shadow-md border border-slate-300 flex flex-col items-center justify-center p-1 font-bold text-lg md:text-2xl">
+    <div className={`w-12 h-16 md:w-16 md:h-24 bg-white rounded shadow-md flex flex-col items-center justify-center p-1 font-bold text-lg md:text-2xl ${highlightClass}`}>
       <div className={`leading-none ${colorClass}`}>{suit}</div>
       <div className={`leading-none ${colorClass}`}>{rank}</div>
     </div>
