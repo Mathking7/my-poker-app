@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Play, AlertCircle, Search, Globe, Lock, Settings, X, List, Users, RefreshCw } from 'lucide-react';
+import { DEFAULT_SETTINGS, MAX_INITIAL_CHIPS, MAX_TIME_LIMIT, MIN_INITIAL_CHIPS, MIN_TIME_LIMIT, normalizeGameSettings } from '../utils/gameSettings';
 
 export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, errorMsg }) {
   const [playerName, setPlayerName] = useState(() => {
@@ -11,13 +12,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
   // 创建房间时的设置弹窗状态
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isCreatingPublic, setIsCreatingPublic] = useState(true);
-  const [settings, setSettings] = useState({
-    initialChips: 1000,
-    timeLimit: 30, 
-    allowJoinDuringGame: true,
-    doubleBlinds: false,
-    autoTopUp: false
-  });
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   // 公开房间列表弹窗状态
   const [showPublicRoomsModal, setShowPublicRoomsModal] = useState(false);
@@ -26,26 +21,26 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
 
   const handleOpenCreateModal = (isPublic) => {
     if (!playerName.trim()) return alert("请先输入你的名字！");
-    try { localStorage.setItem('pokerPlayerName', playerName); } catch {}
+    try { localStorage.setItem('pokerPlayerName', playerName); } catch { /* localStorage may be unavailable */ }
     setIsCreatingPublic(isPublic);
     setShowCreateModal(true);
   };
 
   const handleConfirmCreate = () => {
-    onCreateRoom(playerName, gameType, isCreatingPublic, settings);
+    onCreateRoom(playerName, gameType, isCreatingPublic, normalizeGameSettings(settings));
     setShowCreateModal(false);
   };
 
   const handleAction = (actionFn, ...args) => {
     if (!playerName.trim()) return alert("请先输入你的名字！");
-    try { localStorage.setItem('pokerPlayerName', playerName); } catch {}
+    try { localStorage.setItem('pokerPlayerName', playerName); } catch { /* localStorage may be unavailable */ }
     actionFn(...args);
   };
 
   // 打开并获取公开房间列表
   const handleOpenPublicRooms = async () => {
     if (!playerName.trim()) return alert("请先输入你的名字！");
-    try { localStorage.setItem('pokerPlayerName', playerName); } catch {}
+    try { localStorage.setItem('pokerPlayerName', playerName); } catch { /* localStorage may be unavailable */ }
     setShowPublicRoomsModal(true);
     setIsLoadingRooms(true);
     const rooms = await onFetchPublicRooms(gameType);
@@ -76,7 +71,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
               value={playerName} 
               onChange={e => { 
                 setPlayerName(e.target.value); 
-                try { localStorage.setItem('pokerPlayerName', e.target.value); } catch {}
+                try { localStorage.setItem('pokerPlayerName', e.target.value); } catch { /* localStorage may be unavailable */ }
               }} 
               className="w-full bg-slate-900 border border-slate-600 rounded-lg py-3 px-4 text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition" 
               placeholder="例如：发哥" 
@@ -146,7 +141,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
                     <button key={val} onClick={() => setSettings({...settings, initialChips: val})} className={`flex-1 py-2 rounded font-bold border transition ${settings.initialChips === val ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}>{val}</button>
                   ))}
                 </div>
-                <input type="number" value={settings.initialChips} onChange={e => setSettings({...settings, initialChips: Number(e.target.value)})} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-emerald-500" placeholder="自定义初始筹码" />
+                <input type="number" min={MIN_INITIAL_CHIPS} max={MAX_INITIAL_CHIPS} value={settings.initialChips} onChange={e => setSettings(normalizeGameSettings({...settings, initialChips: e.target.value}))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-emerald-500" placeholder="自定义初始筹码" />
               </div>
 
               <div>
@@ -157,7 +152,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
                   ))}
                 </div>
                 {typeof settings.timeLimit === 'number' && (
-                  <input type="number" value={settings.timeLimit} onChange={e => setSettings({...settings, timeLimit: Number(e.target.value)})} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-blue-500" placeholder="自定义秒数" />
+                  <input type="number" min={MIN_TIME_LIMIT} max={MAX_TIME_LIMIT} value={settings.timeLimit} onChange={e => setSettings(normalizeGameSettings({...settings, timeLimit: e.target.value}))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-blue-500" placeholder="自定义秒数" />
                 )}
               </div>
 
@@ -210,7 +205,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
                        <div>
                          <div className="text-white font-bold tracking-widest text-lg group-hover:text-emerald-400 transition">房号: {room.id}</div>
                          <div className="text-sm text-slate-400 mt-1 flex items-center gap-1">
-                           <Users size={14} /> 玩家人数: {room.players.length} / 9
+                           <Users size={14} /> 在线玩家: {room.activePlayerCount ?? room.players.length} / 9
                          </div>
                        </div>
                        <button
