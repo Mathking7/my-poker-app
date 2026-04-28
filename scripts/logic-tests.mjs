@@ -19,6 +19,16 @@ import {
   shouldMarkLegacyRoom,
   stampPlayerPresence,
 } from '../src/utils/roomMaintenance.js';
+import {
+  TRANSITION_TIMING,
+  buildSettlementPots,
+  createGameTransition,
+  getCommunityCountForStatus,
+  getShowdownAutoStartDelay,
+  getTransitionProgress,
+  isTransitionActive,
+  shouldAutoAdvanceAfterTransition,
+} from '../src/utils/gameFlow.js';
 
 const importJsxAsModule = async (path) => {
   const source = fs.readFileSync(path, 'utf8');
@@ -74,6 +84,50 @@ assert.equal(staleAfter.isSittingOut, true);
 assert.equal(staleAfter.folded, true);
 assert.equal(staleAfter.hasActed, true);
 assert.equal(staleAfter.isOnline, false);
+
+const transition = createGameTransition({
+  type: 'street',
+  fromStatus: 'pre-flop',
+  toStatus: 'flop',
+  now,
+  cardCount: 3,
+});
+assert.equal(transition.durationMs, TRANSITION_TIMING.streetBaseMs + 3 * TRANSITION_TIMING.streetCardGapMs);
+assert.equal(isTransitionActive(transition, now + transition.durationMs - 1), true);
+assert.equal(isTransitionActive(transition, now + transition.durationMs), false);
+assert.equal(getTransitionProgress(transition, now), 0);
+assert.equal(getTransitionProgress(transition, now + transition.durationMs), 1);
+assert.equal(getCommunityCountForStatus('turn'), 4);
+assert.equal(shouldAutoAdvanceAfterTransition({
+  status: 'flop',
+  players: [{ folded: false, allIn: true }, { folded: false, allIn: false }],
+}), true);
+assert.equal(shouldAutoAdvanceAfterTransition({
+  status: 'flop',
+  players: [{ folded: false, allIn: false }, { folded: false, allIn: false }],
+}), false);
+assert.equal(getShowdownAutoStartDelay({
+  status: 'showdown',
+  transition,
+  players: [{ showSequence: 0 }, { showSequence: 1 }],
+}, now), transition.durationMs + 2 * TRANSITION_TIMING.showdownRevealMs + TRANSITION_TIMING.winnerHoldMs);
+const settlement = buildSettlementPots(
+  [
+    { uid: 'a', totalContribution: 50 },
+    { uid: 'b', totalContribution: 100 },
+    { uid: 'c', totalContribution: 100 },
+  ],
+  [
+    { uid: 'a', name: 'A', _score: 30, _rankName: 'best' },
+    { uid: 'b', name: 'B', _score: 20, _rankName: 'second' },
+    { uid: 'c', name: 'C', _score: 10, _rankName: 'third' },
+  ],
+  250,
+);
+assert.equal(settlement.totalAwarded, 250);
+assert.equal(settlement.pots.length, 2);
+assert.equal(settlement.winByUid.a, 150);
+assert.equal(settlement.winByUid.b, 100);
 
 const deck = createDeck();
 assert.equal(deck.length, 52);

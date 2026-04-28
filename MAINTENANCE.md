@@ -188,6 +188,23 @@ npm run lint
 npm run build
 ```
 
+## Animation And Round Pacing
+
+Round transitions are synchronized through `roomData.transition`, not only local UI state. This prevents one player from seeing an action timer while another player is still watching cards deal.
+
+Current timing lives in `src/utils/gameFlow.js`:
+
+- New hand intro: `1200ms`
+- Street transition base: `1150ms`
+- Extra delay per newly dealt community card: `360ms`
+- Showdown intro / pot split: `1800ms`
+- Showdown reveal per player: `1800ms`
+- Winner hold before next hand: `3800ms`
+
+The intended feel is: short enough that repeated hands do not drag, long enough that players can see why the state changed. During a transition, action buttons and countdown timers are locked. If everyone is all-in, the maintenance manager advances streets one transition at a time instead of recursively jumping straight to showdown.
+
+Settlement details are stored in `roomData.settlement.pots`, so split pots can be displayed explicitly instead of only changing chip totals.
+
 Preview a production build:
 
 ```powershell
@@ -227,6 +244,13 @@ const { chromium } = require('playwright');
 
 Note: clicking "确认创建并进入房间" writes a room document to Firebase, so only do that after intentionally starting a cloud-backed multiplayer test.
 
+Latest animation smoke, 2026-04-28:
+
+- Local room `3952`, two browser contexts, completed one full heads-up hand.
+- Observed new-hand, flop, turn, river, showdown, and settlement/pot-split UI states.
+- 8 actions completed; console errors/warnings: none.
+- Mobile lobby viewport `390x844`: no horizontal overflow; console errors/warnings: none.
+
 ## GitHub Release Steps
 
 Check changes:
@@ -240,7 +264,7 @@ git diff
 Commit after checks pass:
 
 ```powershell
-git add .gitignore MAINTENANCE.md package.json scripts/logic-tests.mjs vercel.json src/App.jsx src/components/CardUI.jsx src/components/Lobby.jsx src/components/PokerGame.jsx src/utils/gameSettings.js src/utils/pokerLogic.jsx src/utils/roomMaintenance.js
+git add .gitignore MAINTENANCE.md package.json scripts/logic-tests.mjs vercel.json src/App.jsx src/index.css src/components/CardUI.jsx src/components/Lobby.jsx src/components/PokerGame.jsx src/utils/gameFlow.js src/utils/gameSettings.js src/utils/pokerLogic.jsx src/utils/roomMaintenance.js
 git commit -m "Maintain poker app build and docs"
 ```
 

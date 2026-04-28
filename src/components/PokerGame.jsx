@@ -12,6 +12,17 @@ import {
   stampPlayerPresence,
 } from '../utils/roomMaintenance';
 import { MAX_INITIAL_CHIPS, MAX_PLAYERS, MAX_TIME_LIMIT, MIN_INITIAL_CHIPS, MIN_TIME_LIMIT, getBigBlindForHand, getSmallBlindForHand, isJoinableStatus, normalizeGameSettings } from '../utils/gameSettings';
+import {
+  TRANSITION_TIMING,
+  buildSettlementPots,
+  createGameTransition,
+  getCommunityCountForStatus,
+  getPhaseInfo,
+  getShowdownAutoStartDelay,
+  getTransitionProgress,
+  isTransitionActive,
+  shouldAutoAdvanceAfterTransition,
+} from '../utils/gameFlow';
 import CardUI from './CardUI';
 
 export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
@@ -25,6 +36,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const [currentShowIndex, setCurrentShowIndex] = useState(-1);
   const [showdownFinished, setShowdownFinished] = useState(false);
   const [isLogOpen, setIsLogOpen] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
   
   // 日志自动滚动 Ref
   const logsEndRef = useRef(null);
@@ -34,6 +46,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   useEffect(() => {
     roomDataRef.current = roomData;
   }, [roomData]);
+
+  useEffect(() => {
+    const tickId = setInterval(() => setNowMs(Date.now()), 250);
+    return () => clearInterval(tickId);
+  }, []);
 
   useEffect(() => {
     if (roomData?.players.find(p => p.uid === user?.uid)?.isKicked) {
@@ -47,10 +64,14 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
   const myPlayerInfo = roomData?.players.find(p => p.uid === user?.uid);
   const effectiveSettings = normalizeGameSettings(roomData?.settings);
-  const isMyTurn = roomData?.status !== 'waiting' && roomData?.status !== 'showdown' && roomData?.players[roomData?.turnIndex]?.uid === user?.uid && !roomData?.isPaused;
+  const activeTransition = isTransitionActive(roomData?.transition, nowMs) ? roomData.transition : null;
+  const transitionProgress = activeTransition ? getTransitionProgress(activeTransition, nowMs) : 1;
+  const currentPhaseInfo = getPhaseInfo(roomData?.status);
+  const isActionLocked = Boolean(activeTransition);
+  const isMyTurn = roomData?.status !== 'waiting' && roomData?.status !== 'showdown' && roomData?.players[roomData?.turnIndex]?.uid === user?.uid && !roomData?.isPaused && !isActionLocked;
   const isHost = roomData?.hostUid === user?.uid && user?.uid != null;
   const isCreator = roomData?.creatorUid === user?.uid; 
-  const nowForRender = Date.now();
+  const nowForRender = nowMs;
   const maintenanceManagerUid = getMaintenanceManagerUid(roomData, nowForRender, user?.uid);
   const activeSeatedPlayers = (roomData?.players || []).filter(p => !p.isKicked && !p.isSittingOut && !p.waitingNextHand && isPlayerActive(p, nowForRender, user?.uid, roomData));
   const canStartGame = activeSeatedPlayers.length >= 2 && (
@@ -91,7 +112,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   // ==== 1. 倒计时功能 (自动过牌/弃牌 & 掉线保护) ====
   useEffect(() => {
     // === 修改点 1：各种不需要计时的情况，必须显式清零 timeLeft ===
-    if (roomData?.status === 'waiting' || roomData?.status === 'showdown' || roomData?.isPaused) {
+    if (roomData?.status === 'waiting' || roomData?.status === 'showdown' || roomData?.isPaused || activeTransition) {
       setTimeLeft(0);
       return;
     }
@@ -126,7 +147,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     // handleAction and handleTimeoutForceAction are declared below and intentionally
     // captured from the current render for this turn timer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomData?.turnIndex, roomData?.status, roomData?.isPaused, isMyTurn, callAmount, effectiveSettings.timeLimit, isReferee]);
+  }, [roomData?.turnIndex, roomData?.status, roomData?.isPaused, activeTransition?.id, isMyTurn, callAmount, effectiveSettings.timeLimit, isReferee]);
 
   // ==== 2. 自动开局逻辑 (动态轮转) ====
   useEffect(() => {
@@ -137,17 +158,14 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     if (roomData?.status === 'showdown' && !roomData.isPaused && seatedPlayers >= 2) {
       const managerUid = getMaintenanceManagerUid(roomData, now, user?.uid);
       if (user.uid === managerUid) {
-        // 计算最大明牌序号
-        const maxSeq = Math.max(...(roomData.players.map(p => p.showSequence ?? -1)));
-        // 动画时间 = 每个人2秒 + 核心3秒等待
-        const delay = (maxSeq >= 0 ? (maxSeq + 1) * 2000 : 0) + 3000;
+        const delay = getShowdownAutoStartDelay(roomData, now);
         timeoutId = setTimeout(() => startGame(), delay);
       }
     }
     return () => clearTimeout(timeoutId);
     // startGame is declared below; this effect should rerun only when room state changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomData?.status, roomData?.isPaused, roomData?.players]);
+  }, [roomData?.status, roomData?.isPaused, roomData?.players, roomData?.transition?.id]);
 
   // ==== 3. 玩家在线心跳 ====
   useEffect(() => {
@@ -185,6 +203,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       if (!currentRoom?.players?.length) return;
 
       const now = Date.now();
+      if (isTransitionActive(currentRoom.transition, now)) return;
       const managerUid = getMaintenanceManagerUid(currentRoom, now, user.uid);
       if (managerUid !== user.uid) return;
 
@@ -210,6 +229,38 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     // advanceGameState is declared below; the interval reads the latest room data from roomDataRef.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, user?.uid]);
+
+  // ==== 5. 同步过场收尾：过场结束后才开放行动，all-in 场景继续自动跑牌 ====
+  useEffect(() => {
+    if (!roomData?.transition?.id || !user?.uid || !roomId) return;
+
+    const delay = Math.max(0, Number(roomData.transition.endsAt || 0) - Date.now() + 80);
+    const timeoutId = setTimeout(async () => {
+      const currentRoom = roomDataRef.current;
+      if (!currentRoom?.transition || currentRoom.transition.id !== roomData.transition.id) return;
+
+      const now = Date.now();
+      if (isTransitionActive(currentRoom.transition, now)) return;
+
+      const managerUid = getMaintenanceManagerUid(currentRoom, now, user.uid);
+      if (managerUid !== user.uid) return;
+
+      const nextState = { ...currentRoom, transition: null, updatedAt: now };
+      try {
+        if (shouldAutoAdvanceAfterTransition(nextState)) {
+          await advanceGameState(nextState);
+        } else {
+          await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextState);
+        }
+      } catch (err) {
+        console.error("Transition Completion Error:", err);
+      }
+    }, delay);
+
+    return () => clearTimeout(timeoutId);
+    // advanceGameState is declared below; this effect is gated by a single manager uid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomData?.transition?.id, roomData?.transition?.endsAt, user?.uid, roomId]);
 
   // ==== 5. 聊天记录自动滚动 ====
   useEffect(() => {
@@ -253,28 +304,42 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   useEffect(() => {
     if (roomData?.status === 'showdown') {
       const maxSeq = Math.max(...(roomData.players.map(p => p.showSequence ?? -1)));
+      const revealStartDelay = roomData.transition?.type === 'showdown'
+        ? Math.max(0, Number(roomData.transition.endsAt || 0) - Date.now())
+        : 0;
+      let timer;
+      let startTimer;
+
       if (maxSeq >= 0) {
-        let step = 0;
-        setCurrentShowIndex(0);
-        const timer = setInterval(() => {
-          step++;
-          if (step > maxSeq) {
-            clearInterval(timer);
-            setShowdownFinished(true); // 所有人明牌完毕，展示最终胜者
-            setCurrentShowIndex(-1);
-          } else {
-            setCurrentShowIndex(step);
-          }
-        }, 2000); // 间隔 2s
-        return () => clearInterval(timer);
+        setCurrentShowIndex(-1);
+        setShowdownFinished(false);
+        startTimer = setTimeout(() => {
+          let step = 0;
+          setCurrentShowIndex(0);
+          timer = setInterval(() => {
+            step++;
+            if (step > maxSeq) {
+              clearInterval(timer);
+              setShowdownFinished(true); // 所有人明牌完毕，展示最终胜者
+              setCurrentShowIndex(-1);
+            } else {
+              setCurrentShowIndex(step);
+            }
+          }, TRANSITION_TIMING.showdownRevealMs);
+        }, revealStartDelay);
+        return () => {
+          clearTimeout(startTimer);
+          clearInterval(timer);
+        };
       } else {
-        setShowdownFinished(true); // 如果没人需要明牌（比如全弃牌），直接跳过
+        startTimer = setTimeout(() => setShowdownFinished(true), revealStartDelay);
+        return () => clearTimeout(startTimer);
       }
     } else {
       setCurrentShowIndex(-1);
       setShowdownFinished(false);
     }
-  }, [roomData?.status, roomData?.handCount, roomData?.players]);
+  }, [roomData?.status, roomData?.handCount, roomData?.players, roomData?.transition?.id, roomData?.transition?.type, roomData?.transition?.endsAt]);
 
   // ==== 新增：提取当前应当高光的牌 ====
   const activeHighlights = React.useMemo(() => {
@@ -340,7 +405,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       me.waitingNextHand = false;
       nextData.logs = addLog(nextData, `🚶 ${me.name} 站起观战并弃牌。`);
       await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextData);
-      await advanceGameState(nextData); 
+      if (!isTransitionActive(nextData.transition)) {
+        await advanceGameState(nextData);
+      }
       return;
     }
     if (!me.isSittingOut && isGameInProgress(nextData.status)) {
@@ -383,6 +450,8 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     nextData.deck = [];
     nextData.handCount = 0;
     nextData.lastAggressorUid = null;
+    nextData.transition = null;
+    nextData.settlement = null;
     nextData.updatedAt = Date.now();
     
     // 重置所有玩家状态与筹码
@@ -465,7 +534,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     }
     nextData.updatedAt = Date.now();
     await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextData);
-    if (shouldAdvance) {
+    if (shouldAdvance && !isTransitionActive(nextData.transition)) {
       await advanceGameState(nextData);
     }
     setSelectedPlayer(null);
@@ -497,7 +566,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         nextData.logs = addLog(nextData, `🚪 ${me.name} 离开房间，已转为观战。`);
         nextData.updatedAt = now;
         await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextData);
-        if (shouldAdvance) {
+        if (shouldAdvance && !isTransitionActive(nextData.transition)) {
           await advanceGameState(nextData);
         }
       } else {
@@ -605,13 +674,21 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     players.forEach(p => { if (!p.folded) { p.hand = [deck.pop(), deck.pop()]; } });
 
     logs.push(`--- 第 ${handCount} 局开始 (盲注: ${baseBlind}/${bigBlind}) ---`);
+    const transition = createGameTransition({
+      type: 'hand-start',
+      fromStatus: roomData.status,
+      toStatus: 'pre-flop',
+      now,
+      message: `第 ${handCount} 局开始，盲注 ${baseBlind}/${bigBlind}`,
+      totalPot: pot,
+    });
 
     const newRoomState = {
       ...roomData, status: 'pre-flop', isPaused: false, dealerIndex: nextDealerIndex, turnIndex: utgIndex,
-      deck: deck, communityCards: [], pot: pot, currentBet, minRaise: bigBlind, players, logs, handCount, lastAggressorUid: null, settings, updatedAt: now
+      deck: deck, communityCards: [], pot: pot, currentBet, minRaise: bigBlind, players, logs, handCount, lastAggressorUid: null, settings, updatedAt: now, transition, settlement: null
     };
     if (utgIndex === -1 || players.filter(p => !p.folded && !p.allIn).length <= 1) {
-      await advanceGameState(newRoomState);
+      await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), newRoomState);
       return;
     }
     await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), newRoomState);
@@ -702,37 +779,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
       const contenders = baseContenders; // 将排好序的结果交接回原有的 contenders 变量
       
-      const contributionMap = {};
-      nextState.players.forEach(p => { contributionMap[p.uid] = p.totalContribution || 0; });
-
-      let remainingPot = nextState.pot;
-      while (remainingPot > 0) {
-        const activeContenders = contenders.filter(c => contributionMap[c.uid] > 0);
-        if (activeContenders.length === 0) break;
-
-        const maxScore = Math.max(...activeContenders.map(c => c._score));
-        const winners = activeContenders.filter(c => c._score === maxScore);
-        const minContribution = Math.min(...winners.map(w => contributionMap[w.uid]));
-        
-        let currentLevelPool = 0;
-        Object.keys(contributionMap).forEach(uid => {
-          const take = Math.min(contributionMap[uid], minContribution);
-          currentLevelPool += take;
-          contributionMap[uid] -= take;
-        });
-
-        const share = Math.floor(currentLevelPool / winners.length);
-        winners.forEach(w => {
-          const idx = contenders.findIndex(c => c.uid === w.uid);
-          contenders[idx].winAmount += share;
-        });
-        // 处理余数给第一个胜者
-        if (currentLevelPool % winners.length > 0) {
-          const firstWinnerIdx = contenders.findIndex(c => c.uid === winners[0].uid);
-          contenders[firstWinnerIdx].winAmount += (currentLevelPool % winners.length);
-        }
-        remainingPot -= currentLevelPool;
-      }
+      const totalPot = nextState.pot;
+      const settlementResult = buildSettlementPots(nextState.players, contenders, totalPot);
+      contenders.forEach(c => {
+        c.winAmount = settlementResult.winByUid[c.uid] || 0;
+      });
 
       const winLogs = [];
       contenders.forEach(c => {
@@ -749,6 +800,20 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       });
 
       nextState.logs = addLog(nextState, `🏆 结算完成：${winLogs.join('，')}！`);
+      nextState.transition = nextState.transition || createGameTransition({
+        type: 'showdown',
+        fromStatus: 'river',
+        toStatus: 'showdown',
+        now: nextState.updatedAt,
+        message: '摊牌与分池结算',
+        totalPot,
+      });
+      nextState.settlement = {
+        id: `${nextState.handCount || 0}-${nextState.updatedAt}`,
+        totalPot,
+        pots: settlementResult.pots,
+        totalAwarded: settlementResult.totalAwarded,
+      };
       nextState.pot = 0;
       nextState.currentBet = 0;
       nextState.players.forEach(p => { p.bet = 0; p.hasActed = false; p.lastAction = null; p.totalContribution = 0; });
@@ -761,6 +826,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     if (activeContenders.length === 1) {
       const winner = activeContenders[0];
       const totalWon = nextState.pot;
+      const finishedAt = Date.now();
       
       // 强力清理所有人的状态，确保完全跳过明牌动画，直接进入 3 秒获胜高光
       nextState.players.forEach(p => {
@@ -776,6 +842,25 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       nextState.logs = addLog(nextState, `🏆 玩家【${winner.name}】获胜，赢得底池 ${totalWon}！`);
       
       nextState.status = 'showdown';
+      nextState.transition = createGameTransition({
+        type: 'showdown',
+        fromStatus: currentState.status,
+        toStatus: 'showdown',
+        now: finishedAt,
+        message: `${winner.name} 赢得本局，正在分配底池`,
+        totalPot: totalWon,
+      });
+      nextState.settlement = {
+        id: `${nextState.handCount || 0}-${finishedAt}`,
+        totalPot: totalWon,
+        pots: [{
+          id: 0,
+          label: '主池',
+          amount: totalWon,
+          winners: [{ uid: winner.uid, name: winner.name, rankName: '弃牌获胜', amount: totalWon }],
+        }],
+        totalAwarded: totalWon,
+      };
       nextState.pot = 0;
       nextState.currentBet = 0;
       nextState.players.forEach(p => { p.bet = 0; p.hasActed = false; p.lastAction = null; p.totalContribution = 0; });
@@ -806,6 +891,10 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     }
 
     // 4. 运行到这里说明本轮结束，推进阶段
+    const fromStatus = nextState.status;
+    const transitionNow = Date.now();
+    let dealtCardCount = 0;
+    let transitionMessage = '';
     nextState.players.forEach(p => { p.bet = 0; p.hasActed = false; p.lastAction = null; });
     nextState.currentBet = 0;
     nextState.minRaise = getBigBlindForHand(nextState.settings, nextState.handCount);
@@ -814,33 +903,64 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       nextState.status = 'flop';
       nextState.lastAggressorUid = null;
       nextState.communityCards.push(nextState.deck.pop(), nextState.deck.pop(), nextState.deck.pop());
+      dealtCardCount = 3;
+      transitionMessage = '翻牌：发出三张公共牌';
       nextState.logs = addLog(nextState, `🃏 翻牌: ${nextState.communityCards.join(' ')}`);
     } else if (nextState.status === 'flop') {
       nextState.status = 'turn';
       nextState.lastAggressorUid = null;
       nextState.communityCards.push(nextState.deck.pop());
+      dealtCardCount = 1;
+      transitionMessage = '转牌：发出第四张公共牌';
       nextState.logs = addLog(nextState, `🃏 转牌: ${nextState.communityCards[3]}`);
     } else if (nextState.status === 'turn') {
       nextState.status = 'river';
       nextState.lastAggressorUid = null;
       nextState.communityCards.push(nextState.deck.pop());
+      dealtCardCount = 1;
+      transitionMessage = '河牌：发出第五张公共牌';
       nextState.logs = addLog(nextState, `🃏 河牌: ${nextState.communityCards[4]}`);
     } else if (nextState.status === 'river') {
       nextState.status = 'showdown';
+      nextState.transition = createGameTransition({
+        type: 'showdown',
+        fromStatus,
+        toStatus: 'showdown',
+        now: transitionNow,
+        message: '进入摊牌与分池结算',
+        totalPot: nextState.pot,
+      });
       await advanceGameState(nextState); // 递归进入结算并返回
       return;
     }
 
     // 5. 决定是自动跑下一阶段还是等待玩家
     // 如果可行动人数 <= 1，且场上还有 2 个以上的人在竞争（说明有人全下了），自动跑牌
-    if (needToAct.length <= 1 && activeContenders.length >= 2) {
-      await advanceGameState(nextState); // 递归：自动发下一张牌或结算
-      return; 
-    } else if (activeContenders.length >= 2) {
+    const shouldAutoRun = needToAct.length <= 1 && activeContenders.length >= 2;
+    if (activeContenders.length >= 2) {
+      nextState.transition = createGameTransition({
+        type: 'street',
+        fromStatus,
+        toStatus: nextState.status,
+        now: transitionNow,
+        message: transitionMessage,
+        cardCount: dealtCardCount,
+        totalPot: nextState.pot,
+        autoAdvance: shouldAutoRun,
+      });
+
+      if (shouldAutoRun) {
+        nextState.turnIndex = -1;
+        await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextState);
+        return;
+      }
+
       // 正常多玩家对局：定位第一个行动者并停止函数，等待 Firebase 同步给前端
       let nextTurn = getNextActionIndex(nextState.players, nextState.dealerIndex);
       if (nextTurn === -1) {
-        await advanceGameState(nextState);
+        nextState.turnIndex = -1;
+        nextState.transition.autoAdvance = true;
+        await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', roomId), nextState);
         return;
       }
       nextState.turnIndex = nextTurn;
@@ -849,8 +969,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   };
 
   const handleAction = async (actionType, amount = 0) => {
-    if (!roomData || roomData.isPaused || !isGameInProgress(roomData.status) || roomData.players[roomData.turnIndex]?.uid !== user.uid) return;
+    if (!roomData || roomData.isPaused || isTransitionActive(roomData.transition) || !isGameInProgress(roomData.status) || roomData.players[roomData.turnIndex]?.uid !== user.uid) return;
     let nextState = JSON.parse(JSON.stringify(roomData));
+    nextState.transition = null;
     const meIndex = nextState.turnIndex;
     const me = nextState.players[meIndex];
     if (!me || me.folded || me.allIn || me.isSittingOut) return;
@@ -916,9 +1037,10 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   // ==== 房主处理掉线/挂机玩家的强制超时逻辑 (防卡死机制) ====
   const handleTimeoutForceAction = async () => {
     // 只有房主有权限当裁判，并且游戏必须在进行中
-    if (!isReferee || !roomData || roomData.status === 'waiting' || roomData.status === 'showdown') return;
+    if (!isReferee || !roomData || isTransitionActive(roomData.transition) || roomData.status === 'waiting' || roomData.status === 'showdown') return;
     
     let nextState = JSON.parse(JSON.stringify(roomData));
+    nextState.transition = null;
     const targetIndex = nextState.turnIndex;
     const targetPlayer = nextState.players[targetIndex];
     
@@ -950,6 +1072,16 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const displayBlind = effectiveSettings.doubleBlinds
     ? getSmallBlindForHand(effectiveSettings, roomData.handCount || 1)
     : getSmallBlindForHand(effectiveSettings, 1);
+  const transitionPhaseInfo = activeTransition ? getPhaseInfo(activeTransition.toStatus) : currentPhaseInfo;
+  const transitionDetail = activeTransition?.message || currentPhaseInfo.detail;
+  const newCommunityStartIndex = activeTransition?.type === 'street'
+    ? getCommunityCountForStatus(activeTransition.fromStatus)
+    : Number.POSITIVE_INFINITY;
+  const displayPotAmount = roomData.status === 'showdown' && roomData.settlement?.totalPot
+    ? roomData.settlement.totalPot
+    : roomData.pot;
+  const settlementPots = roomData.settlement?.pots || [];
+  const showSettlementPanel = roomData.status === 'showdown' && settlementPots.length > 0 && showdownFinished;
 
   return (
     <div className="h-screen bg-slate-900 text-slate-200 font-sans flex flex-col relative overflow-hidden">
@@ -968,6 +1100,10 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
               {displayBlind} / {displayBlind * 2}
             </span></span>
             {effectiveSettings.doubleBlinds && <span className="text-slate-400 text-xs ml-1"> (局数 {((roomData.handCount||1)-1)%5 + 1}/5)</span>}
+          </div>
+          <div className="hidden lg:flex items-center gap-2 bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-700/60 text-sm">
+            <span className="text-emerald-300 font-bold">{transitionPhaseInfo.label}</span>
+            {activeTransition && <span className="text-amber-300 text-xs">过场中</span>}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -1002,6 +1138,23 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
           
           {roomData.isPaused && <div className="absolute inset-0 bg-black/40 z-10 flex items-center justify-center backdrop-blur-sm pointer-events-none"><h1 className="text-5xl font-black text-white tracking-widest drop-shadow-lg">对局已暂停</h1></div>}
 
+          {activeTransition && (
+            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 pointer-events-none w-[min(92vw,520px)] phase-banner-in">
+              <div className="bg-slate-950/88 backdrop-blur border border-emerald-500/50 shadow-[0_12px_36px_rgba(0,0,0,0.45)] rounded-lg px-5 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-xs uppercase tracking-widest text-emerald-300">{transitionPhaseInfo.shortLabel}</div>
+                    <div className="text-xl font-black text-white mt-0.5">{transitionPhaseInfo.label}</div>
+                  </div>
+                  <div className="text-right text-sm text-slate-300 max-w-[260px]">{transitionDetail}</div>
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden mt-3">
+                  <div className="h-full bg-emerald-400 rounded-full origin-left transition-transform duration-200" style={{ transform: `scaleX(${transitionProgress})` }} />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ==== 新增：悬浮的“打开日志”按钮 ==== */}
           {!isLogOpen && (
             <button 
@@ -1019,7 +1172,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
             <div className="flex justify-center gap-4 md:gap-8 flex-wrap z-0 flex-shrink-0">
               {roomData.players.map((p, idx) => {
                 if (p.uid === user.uid) return null;
-                const isTurn = roomData.status !== 'waiting' && roomData.status !== 'showdown' && roomData.turnIndex === idx && !roomData.isPaused;
+                const isTurn = roomData.status !== 'waiting' && roomData.status !== 'showdown' && roomData.turnIndex === idx && !roomData.isPaused && !isActionLocked;
                 const isDealer = roomData.dealerIndex === idx;
                 
                 // ==== 新增特效判定 ====
@@ -1046,7 +1199,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
                     {/* 修改点 2.1：正常的下注气泡（去掉 animate-bounce 转为静止） */}
                     {roomData.status !== 'waiting' && roomData.status !== 'showdown' && p.bet > 0 && !p.folded && (
-                      <div className={`absolute -bottom-12 left-1/2 transform -translate-x-1/2 font-black px-4 py-1.5 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.5)] border-2 z-40 text-sm flex items-center gap-1 transition-all ${getActionColor(p.lastAction)}`}>
+                      <div key={`${p.uid}-${p.bet}-${p.lastAction}`} className={`absolute -bottom-12 left-1/2 transform -translate-x-1/2 font-black px-4 py-1.5 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.5)] border-2 z-40 text-sm flex items-center gap-1 transition-all chip-pop ${getActionColor(p.lastAction)}`}>
                         <Coins size={14} /> {p.bet}
                       </div>
                     )}
@@ -1093,13 +1246,43 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                 </div>
               ) : (
                 <div className="text-center">
+                  <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-slate-600/70 bg-slate-950/55 px-4 py-1.5 text-sm shadow-lg">
+                    <span className="text-slate-400">当前轮次</span>
+                    <span className="font-black text-emerald-300">{transitionPhaseInfo.label}</span>
+                    {activeTransition && <span className="text-amber-300 text-xs">等待发牌动画完成</span>}
+                  </div>
                   <div className="bg-slate-900/80 backdrop-blur px-8 py-3 rounded-full border border-emerald-500/30 inline-flex flex-col items-center mb-6 shadow-xl">
-                    <span className="text-slate-400 text-xs uppercase tracking-wider mb-1">当前底池 / Main Pot</span>
-                    <span className="text-4xl font-black text-amber-400 flex items-center gap-2"><Coins size={28}/> {roomData.pot}</span>
+                    <span className="text-slate-400 text-xs uppercase tracking-wider mb-1">{roomData.status === 'showdown' ? '本局奖池 / Awarded Pot' : '当前底池 / Main Pot'}</span>
+                    <span key={displayPotAmount} className="text-4xl font-black text-amber-400 flex items-center gap-2 pot-pulse"><Coins size={28}/> {displayPotAmount}</span>
                   </div>
                   <div className="flex justify-center gap-2 md:gap-4 h-24">
-                    {[0, 1, 2, 3, 4].map(i => <CardUI key={i} card={roomData.communityCards[i]} highlight={activeHighlights.includes(roomData.communityCards[i])}/>)}
+                    {[0, 1, 2, 3, 4].map(i => {
+                      const isNewCard = Boolean(activeTransition?.type === 'street' && i >= newCommunityStartIndex && i < roomData.communityCards.length);
+                      const dealDelay = isNewCard ? (i - newCommunityStartIndex) * 180 : 0;
+                      return (
+                        <CardUI
+                          key={`${roomData.handCount || 0}-${i}-${roomData.communityCards[i] || 'empty'}`}
+                          card={roomData.communityCards[i]}
+                          highlight={activeHighlights.includes(roomData.communityCards[i])}
+                          className={isNewCard ? 'card-deal-in' : ''}
+                          style={isNewCard ? { animationDelay: `${dealDelay}ms` } : undefined}
+                        />
+                      );
+                    })}
                   </div>
+                  {showSettlementPanel && (
+                    <div className="mt-5 mx-auto w-[min(92vw,520px)] space-y-2">
+                      {settlementPots.map((pot, index) => (
+                        <div key={`${roomData.settlement.id}-${pot.id}`} className="settlement-rise flex items-center justify-between gap-3 rounded-lg border border-amber-400/35 bg-slate-950/70 px-4 py-2 text-sm shadow-lg" style={{ animationDelay: `${index * 180}ms` }}>
+                          <div className="text-left">
+                            <div className="font-black text-amber-300">{pot.label} · {pot.amount}</div>
+                            <div className="text-slate-300">{pot.winners.map(w => `${w.name} +${w.amount}`).join('，')}</div>
+                          </div>
+                          <Coins size={20} className="text-amber-300 flex-none" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1124,7 +1307,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                   
                   {/* 自己的正常下注气泡（去掉 animate-bounce 转为静止） */}
                   {roomData.status !== 'waiting' && roomData.status !== 'showdown' && myPlayerInfo.bet > 0 && !myPlayerInfo.folded && (
-                    <div className={`absolute -top-16 left-1/2 transform -translate-x-1/2 font-black px-5 py-2 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.5)] border-2 z-40 text-base flex items-center gap-1 transition-all ${getActionColor(myPlayerInfo.lastAction)}`}>
+                    <div key={`${myPlayerInfo.uid}-${myPlayerInfo.bet}-${myPlayerInfo.lastAction}`} className={`absolute -top-16 left-1/2 transform -translate-x-1/2 font-black px-5 py-2 rounded-full shadow-[0_5px_15px_rgba(0,0,0,0.5)] border-2 z-40 text-base flex items-center gap-1 transition-all chip-pop ${getActionColor(myPlayerInfo.lastAction)}`}>
                       <Coins size={18} /> {myPlayerInfo.bet}
                     </div>
                   )}
