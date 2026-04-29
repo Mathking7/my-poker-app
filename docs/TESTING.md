@@ -124,6 +124,25 @@ D:\codexroot\poker-transition-portrait.png
 D:\codexroot\poker-transition-landscape.png
 ```
 
+### Raise Slider Smoke
+
+```powershell
+npm run smoke:raise-slider
+```
+
+Checks:
+- A live two-player hand automatically finds the player who can currently raise.
+- The number input shows this action's additional chips instead of the total committed bet.
+- The input step is `10`, and a dragged slider result remains a multiple of `10`.
+- The slider fill follows the snapped chip step.
+
+Default outputs:
+
+```text
+D:\codexroot\poker-raise-slider-smoke.json
+D:\codexroot\poker-raise-slider-smoke.png
+```
+
 ### Multiway Layout Smoke
 
 ```powershell
@@ -162,4 +181,10 @@ npm run build
 $env:NODE_PATH='C:\Users\26808\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
 npm run smoke:transition
 npm run smoke:multiway-layout
+```
+
+If raise, all-in, or slider interactions changed, also run:
+
+```powershell
+npm run smoke:raise-slider
 ```

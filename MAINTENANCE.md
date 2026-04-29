@@ -689,3 +689,37 @@ vercel env add VITE_FIREBASE_STORAGE_BUCKET production
 vercel env add VITE_FIREBASE_MESSAGING_SENDER_ID production
 vercel env add VITE_FIREBASE_APP_ID production
 ```
+
+## 2026-04-29 v1.1 Raise Slider Maintenance
+
+What changed:
+
+- Final local backup: `C:\Users\26808\my-poker-app-backups\v1.1-slider-curve-local-20260429-222548.zip`
+- The raise number field now displays the chips added by this action, not the player's total committed bet.
+- The raise slider is a custom snapped control. Pointer movement is converted through the nonlinear raise curve, then snapped back to a legal `CHIP_UNIT = 10` amount before the thumb/fill move.
+- When the only legal raise is a small all-in (`minAmount === maxAmount`), the slider fill/handle stays at the far right.
+- The slider scale label changed from `底池` to `满池`.
+- The `满池` scale label is positioned at the real full-pot raise point instead of a fixed center position. Deep stacks move it strongly left; stacks closer to full pot move it right; insufficient stacks hide the full-pot marker.
+- The post-pot slider curve uses a moderate acceleration curve, so the amount progression feels continuous without becoming linear.
+- App version is now `v1.1`; the lobby version modal keeps the `v1.0` notes below the new update notes.
+- This change set is intentionally not pushed/deployed yet.
+
+Verification commands used:
+
+```powershell
+npm run lint
+npm run test:logic
+npm run build
+$env:NODE_PATH='C:\Users\26808\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
+npm run smoke:raise-slider
+```
+
+Focused browser result:
+
+- Output: `D:\codexroot\poker-raise-slider-smoke.json`
+- Screenshot: `D:\codexroot\poker-raise-slider-smoke.png`
+- Room: `7455`
+- Active player page: `guest`
+- Before drag: additional raise input `30`, step `10`, fill `0%`, full-pot label position `17.99%`
+- After drag around 74%: additional raise input `560`, step `10`, fill `73.95%`
+- Version modal smoke: `D:\codexroot\poker-version-history-smoke.json`; verified lobby button `v1.1`, and modal history includes both `v1.1` and `v1.0`.

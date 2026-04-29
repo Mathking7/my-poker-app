@@ -19,10 +19,14 @@ import {
   clampRaiseAmount,
   createGameTransition,
   getCommunityCountForStatus,
+  getFullPotSliderMark,
   getPlayerBettingOptions,
   getPhaseInfo,
+  getRaiseIncrementAmount,
+  getRaiseIncrementBounds,
   getShowdownAutoStartDelay,
   getSliderValueForRaiseAmount,
+  getTotalRaiseAmountFromIncrement,
   getTransitionProgress,
   isTransitionActive,
   shouldAutoAdvanceAfterTransition,
@@ -149,9 +153,24 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     bettingOptions,
   });
   const canRaiseNow = canTakeAction && canPotentiallyRaise;
-  const potRaiseTarget = roomData
-    ? clampRaiseAmount(Math.floor((roomData.currentBet || 0) + potAfterCall), minRaiseTarget, maxBet)
+  const fullPotRaiseTarget = roomData
+    ? quantizeChipAmount(Math.floor((roomData.currentBet || 0) + potAfterCall), 'floor')
     : 0;
+  const potRaiseTarget = roomData
+    ? clampRaiseAmount(fullPotRaiseTarget, minRaiseTarget, maxBet)
+    : 0;
+  const fullPotSliderMark = getFullPotSliderMark({
+    fullPotRaiseTarget,
+    minRaiseTarget,
+    maxBet,
+  });
+  const showFullPotPreset = fullPotRaiseTarget >= minRaiseTarget && fullPotRaiseTarget < maxBet;
+  const raiseIncrementBounds = getRaiseIncrementBounds({
+    playerBet: myPlayerInfo?.bet || 0,
+    minRaiseTarget,
+    maxBet,
+  });
+  const raiseIncrementInput = getRaiseIncrementAmount(raiseInput, myPlayerInfo?.bet || 0);
   const isMobileRaiseOpen = showMobileRaisePanel && canRaiseNow;
   const {
     actionStatusDetail,
@@ -183,6 +202,15 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         maxAmount: maxBet,
       }));
     }
+  };
+
+  const setRaiseIncrementAmount = (amount, options = {}) => {
+    setRaiseAmount(getTotalRaiseAmountFromIncrement({
+      incrementAmount: amount,
+      playerBet: myPlayerInfo?.bet || 0,
+      minRaiseTarget,
+      maxBet,
+    }), options);
   };
 
   // 实时计算自己的当前牌型
@@ -1389,12 +1417,18 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                 maxBet,
                 minRaiseTarget,
                 pot: roomData.pot,
+                fullPotSliderPosition: fullPotSliderMark.position,
                 potRaiseTarget,
+                raiseIncrementInput,
                 raiseInput,
                 raiseSliderInput,
+                showFullPotPreset,
+                showFullPotSliderMark: fullPotSliderMark.visible,
+                minRaiseIncrement: raiseIncrementBounds.min,
+                maxRaiseIncrement: raiseIncrementBounds.max,
                 onAction: handleAction,
+                onRaiseIncrementChange: setRaiseIncrementAmount,
                 onRaiseAmountChange: setRaiseAmount,
-                onRaiseSliderChange: setRaiseSliderInput,
                 onToggleMobileRaise: () => setShowMobileRaisePanel((value) => !value),
                 calcPotRaise,
               }}

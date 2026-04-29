@@ -29,10 +29,14 @@ import {
   clampRaiseAmount,
   createGameTransition,
   getCommunityCountForStatus,
+  getFullPotSliderMark,
   getNonlinearRaiseAmount,
   getPlayerBettingOptions,
+  getRaiseIncrementAmount,
+  getRaiseIncrementBounds,
   getSliderValueForRaiseAmount,
   getShowdownAutoStartDelay,
+  getTotalRaiseAmountFromIncrement,
   getTransitionProgress,
   isTransitionActive,
   shouldAutoAdvanceAfterTransition,
@@ -195,10 +199,31 @@ assert.equal(clampRaiseAmount(45, 20, 100), 50);
 assert.equal(clampRaiseAmount(44, 45, 99), 50);
 assert.equal(quantizeChipAmount(505, 'floor'), 500);
 assert.equal(getNonlinearRaiseAmount({ sliderValue: 0, minAmount: 40, potAmount: 120, maxAmount: 1000 }), 40);
-assert.equal(getNonlinearRaiseAmount({ sliderValue: 68, minAmount: 40, potAmount: 120, maxAmount: 1000 }), 120);
+const potSliderValue = getSliderValueForRaiseAmount({ amount: 120, minAmount: 40, potAmount: 120, maxAmount: 1000 });
+assert.ok(potSliderValue > 29 && potSliderValue < 30);
+assert.equal(getNonlinearRaiseAmount({ sliderValue: potSliderValue, minAmount: 40, potAmount: 120, maxAmount: 1000 }), 120);
 assert.equal(getNonlinearRaiseAmount({ sliderValue: 100, minAmount: 40, potAmount: 120, maxAmount: 1000 }), 1000);
-assert.equal(getSliderValueForRaiseAmount({ amount: 120, minAmount: 40, potAmount: 120, maxAmount: 1000 }), 68);
 assert.equal(getSliderValueForRaiseAmount({ amount: 1000, minAmount: 40, potAmount: 120, maxAmount: 1000 }), 100);
+assert.equal(getSliderValueForRaiseAmount({ amount: 50, minAmount: 50, potAmount: 50, maxAmount: 50 }), 100);
+assert.ok(getNonlinearRaiseAmount({ sliderValue: 70, minAmount: 40, potAmount: 120, maxAmount: 1000 }) > 450);
+assert.ok(getNonlinearRaiseAmount({ sliderValue: 92, minAmount: 40, potAmount: 120, maxAmount: 1000 }) > 800);
+const deepFullPotMark = getFullPotSliderMark({ fullPotRaiseTarget: 120, minRaiseTarget: 40, maxBet: 10000 });
+const standardFullPotMark = getFullPotSliderMark({ fullPotRaiseTarget: 120, minRaiseTarget: 40, maxBet: 1000 });
+const shallowFullPotMark = getFullPotSliderMark({ fullPotRaiseTarget: 120, minRaiseTarget: 40, maxBet: 150 });
+assert.equal(deepFullPotMark.visible, true);
+assert.equal(standardFullPotMark.visible, true);
+assert.equal(shallowFullPotMark.visible, true);
+assert.ok(deepFullPotMark.position < standardFullPotMark.position);
+assert.ok(shallowFullPotMark.position > standardFullPotMark.position);
+assert.ok(deepFullPotMark.position < 15);
+assert.ok(standardFullPotMark.position > 29 && standardFullPotMark.position < 30);
+assert.ok(shallowFullPotMark.position > 75);
+assert.equal(getFullPotSliderMark({ fullPotRaiseTarget: 120, minRaiseTarget: 40, maxBet: 110 }).visible, false);
+assert.equal(getFullPotSliderMark({ fullPotRaiseTarget: 40, minRaiseTarget: 40, maxBet: 1000 }).visible, false);
+assert.deepEqual(getRaiseIncrementBounds({ playerBet: 20, minRaiseTarget: 50, maxBet: 200 }), { min: 30, max: 180 });
+assert.equal(getRaiseIncrementAmount(120, 20), 100);
+assert.equal(getTotalRaiseAmountFromIncrement({ incrementAmount: 100, playerBet: 20, minRaiseTarget: 50, maxBet: 200 }), 120);
+assert.equal(getTotalRaiseAmountFromIncrement({ incrementAmount: 15, playerBet: 20, minRaiseTarget: 50, maxBet: 200 }), 50);
 let previousRaise = 0;
 for (let slider = 0; slider <= 100; slider += 1) {
   const amount = getNonlinearRaiseAmount({ sliderValue: slider, minAmount: 40, potAmount: 120, maxAmount: 1000 });

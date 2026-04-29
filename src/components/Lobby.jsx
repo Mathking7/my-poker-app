@@ -3,6 +3,31 @@ import { Play, AlertCircle, Search, Globe, Lock, Settings, X, List, Users, Refre
 import { CHIP_UNIT } from '../utils/chipMath';
 import { DEFAULT_SETTINGS, MAX_INITIAL_CHIPS, MAX_TIME_LIMIT, MIN_INITIAL_CHIPS, MIN_TIME_LIMIT, normalizeGameSettings } from '../utils/gameSettings';
 
+const VERSION_HISTORY = [
+  {
+    version: 'v1.1',
+    title: '加注滑块体验更新',
+    date: '2026-04-29',
+    summary: '优化加注操作，让下注选择更顺手。',
+    changes: [
+      '优化加注滑块手感。',
+      '加注输入框显示本次新增下注额，而不是总下注额。',
+      '版本信息保留历史更新记录。',
+    ],
+  },
+  {
+    version: 'v1.0',
+    title: '首个稳定验收版本',
+    date: '2026-04-29',
+    summary: '完成公开与私密房间、多人德州扑克对局、桌面端与移动端布局、房间维护、下注流程与摊牌结算。',
+    changes: [
+      '支持公开房间、私密房间和匿名玩家加入。',
+      '支持盲注、下注、跟注、过牌、弃牌、全下、摊牌和分池结算。',
+      '加入移动端与桌面端响应式牌桌，以及基础过场动画和计时提示。',
+    ],
+  },
+];
+
 export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, errorMsg }) {
   const [playerName, setPlayerName] = useState(() => {
     try { return localStorage.getItem('pokerPlayerName') || ''; } catch { return ''; }
@@ -64,7 +89,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
         onClick={() => setShowVersionModal(true)}
         className="absolute left-4 top-4 rounded-full border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-sm font-bold text-emerald-300 shadow-lg transition hover:border-emerald-400 hover:bg-slate-800"
       >
-        v1.0
+        {VERSION_HISTORY[0].version}
       </button>
 
       <div className="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-md border border-slate-700">
@@ -134,24 +159,38 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
 
       {showVersionModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm border border-slate-600 overflow-hidden">
+          <div className="bg-slate-800 rounded-xl shadow-2xl w-full max-w-md border border-slate-600 overflow-hidden">
             <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-900/50">
               <h2 className="text-lg font-bold text-white">版本信息</h2>
               <button onClick={() => setShowVersionModal(false)} className="text-slate-400 hover:text-white transition">
                 <X size={20} />
               </button>
             </div>
-            <div className="p-5 space-y-4 text-sm text-slate-300">
-              <div>
-                <div className="text-xl font-black text-emerald-300">德州扑克 v1.0</div>
-                <div className="mt-1 text-slate-500">首个稳定验收版本</div>
-              </div>
-              <p className="leading-relaxed">
-                支持公开与私密房间、多人德州扑克对局、桌面端与移动端布局、基础房间维护、下注流程与摊牌结算。
-              </p>
-              <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-slate-400">
-                版本日期：2026-04-29
-              </div>
+            <div className="max-h-[70vh] overflow-y-auto p-5 space-y-4 text-sm text-slate-300">
+              {VERSION_HISTORY.map((release, index) => (
+                <section key={release.version} className="rounded-lg border border-slate-700 bg-slate-900/55 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className={`text-xl font-black ${index === 0 ? 'text-emerald-300' : 'text-slate-200'}`}>
+                        德州扑克 {release.version}
+                      </div>
+                      <div className="mt-1 font-bold text-slate-300">{release.title}</div>
+                    </div>
+                    <div className="shrink-0 rounded-full border border-slate-600 px-2.5 py-1 text-xs text-slate-400">
+                      {release.date}
+                    </div>
+                  </div>
+                  <p className="mt-3 leading-relaxed text-slate-400">{release.summary}</p>
+                  <ul className="mt-3 space-y-2 text-slate-300">
+                    {release.changes.map((change) => (
+                      <li key={change} className="flex gap-2 leading-relaxed">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/80" />
+                        <span>{change}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
             </div>
           </div>
         </div>

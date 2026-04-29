@@ -154,10 +154,41 @@ export const clampRaiseAmount = (amount, minAmount, maxAmount) => {
   return Math.min(max, Math.max(min, value));
 };
 
+export const getRaiseIncrementAmount = (totalAmount, playerBet = 0) => {
+  const committed = quantizeChipAmount(playerBet || 0, 'floor');
+  return Math.max(0, quantizeChipAmount(toFiniteNumber(totalAmount) - committed, 'nearest'));
+};
+
+export const getRaiseIncrementBounds = ({ playerBet = 0, minRaiseTarget = 0, maxBet = 0 }) => {
+  const committed = quantizeChipAmount(playerBet || 0, 'floor');
+  const max = Math.max(0, quantizeChipAmount(toFiniteNumber(maxBet) - committed, 'floor'));
+  const min = Math.min(max, Math.max(0, quantizeChipAmount(toFiniteNumber(minRaiseTarget) - committed, 'ceil')));
+  return { min, max };
+};
+
+export const getTotalRaiseAmountFromIncrement = ({ incrementAmount, playerBet = 0, minRaiseTarget = 0, maxBet = 0 }) => {
+  const committed = quantizeChipAmount(playerBet || 0, 'floor');
+  return clampRaiseAmount(committed + toFiniteNumber(incrementAmount), minRaiseTarget, maxBet);
+};
+
 const getRaiseAnchor = (minAmount, potAmount, maxAmount) => {
   const { min, max } = getRaiseBounds(minAmount, maxAmount);
   return clampRaiseAmount(toFiniteNumber(potAmount, min), min, max);
 };
+
+const getRaiseSliderAnchor = (minAmount, potAmount, maxAmount) => {
+  const { min, max } = getRaiseBounds(minAmount, maxAmount);
+  if (max <= min) return max > 0 ? 100 : 0;
+
+  const anchor = getRaiseAnchor(min, potAmount, max);
+  if (anchor <= min) return 0;
+  if (anchor >= max) return 100;
+
+  const potRatio = (anchor - min) / Math.max(1, max - min);
+  return Math.min(92, Math.max(8, 8 + 84 * Math.pow(potRatio, 0.55)));
+};
+
+const roundSliderValue = (value) => Math.round(value * 100) / 100;
 
 export const getNonlinearRaiseAmount = ({ sliderValue, minAmount, potAmount, maxAmount }) => {
   const { min, max } = getRaiseBounds(minAmount, maxAmount);
@@ -165,12 +196,22 @@ export const getNonlinearRaiseAmount = ({ sliderValue, minAmount, potAmount, max
 
   const anchor = getRaiseAnchor(min, potAmount, max);
   const slider = Math.min(100, Math.max(0, toFiniteNumber(sliderValue)));
-  const anchorSlider = 68;
+  const anchorSlider = getRaiseSliderAnchor(min, anchor, max);
 
-  if (slider <= anchorSlider || anchor >= max) {
+  if (anchor <= min) {
+    const t = slider / 100;
+    return clampRaiseAmount(Math.round(min + (max - min) * Math.pow(t, 2.1)), min, max);
+  }
+
+  if (anchor >= max) {
+    const t = slider / 100;
+    return clampRaiseAmount(Math.round(min + (max - min) * Math.pow(t, 1.2)), min, max);
+  }
+
+  if (slider <= anchorSlider) {
     const span = Math.max(0, anchor - min);
     const t = anchorSlider <= 0 ? 1 : slider / anchorSlider;
-    return clampRaiseAmount(Math.round(min + span * Math.pow(t, 1.35)), min, max);
+    return clampRaiseAmount(Math.round(min + span * Math.pow(t, 1.08)), min, max);
   }
 
   const t = (slider - anchorSlider) / (100 - anchorSlider);
@@ -179,20 +220,53 @@ export const getNonlinearRaiseAmount = ({ sliderValue, minAmount, potAmount, max
 
 export const getSliderValueForRaiseAmount = ({ amount, minAmount, potAmount, maxAmount }) => {
   const { min, max } = getRaiseBounds(minAmount, maxAmount);
-  if (max <= min) return 0;
+  if (max <= min) return max > 0 ? 100 : 0;
 
   const anchor = getRaiseAnchor(min, potAmount, max);
   const value = clampRaiseAmount(amount, min, max);
-  const anchorSlider = 68;
+  const anchorSlider = getRaiseSliderAnchor(min, anchor, max);
 
-  if (value <= anchor || anchor >= max) {
+  if (anchor <= min) {
+    const t = Math.min(1, Math.max(0, (value - min) / Math.max(1, max - min)));
+    return roundSliderValue(100 * Math.pow(t, 1 / 2.1));
+  }
+
+  if (anchor >= max) {
+    const t = Math.min(1, Math.max(0, (value - min) / Math.max(1, max - min)));
+    return roundSliderValue(100 * Math.pow(t, 1 / 1.2));
+  }
+
+  if (value <= anchor) {
     const span = Math.max(1, anchor - min);
     const t = Math.min(1, Math.max(0, (value - min) / span));
-    return Math.round(anchorSlider * Math.pow(t, 1 / 1.35));
+    return roundSliderValue(anchorSlider * Math.pow(t, 1 / 1.08));
   }
 
   const t = Math.min(1, Math.max(0, (value - anchor) / Math.max(1, max - anchor)));
-  return Math.round(anchorSlider + (100 - anchorSlider) * Math.pow(t, 1 / 1.6));
+  return roundSliderValue(anchorSlider + (100 - anchorSlider) * Math.pow(t, 1 / 1.6));
+};
+
+export const getFullPotSliderMark = ({ fullPotRaiseTarget = 0, minRaiseTarget = 0, maxBet = 0 }) => {
+  const target = quantizeChipAmount(fullPotRaiseTarget, 'floor');
+  const min = quantizeChipAmount(minRaiseTarget, 'ceil');
+  const max = quantizeChipAmount(maxBet, 'floor');
+
+  if (target <= min || target >= max) {
+    return {
+      visible: false,
+      position: null,
+    };
+  }
+
+  return {
+    visible: true,
+    position: getSliderValueForRaiseAmount({
+      amount: target,
+      minAmount: min,
+      potAmount: target,
+      maxAmount: max,
+    }),
+  };
 };
 
 export const getPlayerBettingOptions = (room, playerOrUid) => {
