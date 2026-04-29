@@ -1,3 +1,5 @@
+import { clampChipAmount } from './chipMath.js';
+
 export const MIN_INITIAL_CHIPS = 100;
 export const MAX_INITIAL_CHIPS = 100000;
 export const MIN_TIME_LIMIT = 5;
@@ -24,7 +26,7 @@ export const normalizeGameSettings = (settings = {}) => {
     : clampNumber(merged.timeLimit, MIN_TIME_LIMIT, MAX_TIME_LIMIT, DEFAULT_SETTINGS.timeLimit);
 
   return {
-    initialChips: clampNumber(merged.initialChips, MIN_INITIAL_CHIPS, MAX_INITIAL_CHIPS, DEFAULT_SETTINGS.initialChips),
+    initialChips: clampChipAmount(merged.initialChips, MIN_INITIAL_CHIPS, MAX_INITIAL_CHIPS),
     timeLimit,
     allowJoinDuringGame: Boolean(merged.allowJoinDuringGame),
     doubleBlinds: Boolean(merged.doubleBlinds),

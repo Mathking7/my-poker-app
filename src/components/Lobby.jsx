@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Play, AlertCircle, Search, Globe, Lock, Settings, X, List, Users, RefreshCw } from 'lucide-react';
+import { CHIP_UNIT } from '../utils/chipMath';
 import { DEFAULT_SETTINGS, MAX_INITIAL_CHIPS, MAX_TIME_LIMIT, MIN_INITIAL_CHIPS, MIN_TIME_LIMIT, normalizeGameSettings } from '../utils/gameSettings';
 
 export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, errorMsg }) {
@@ -8,6 +9,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
   });
   const [gameType, setGameType] = useState('texas');
   const [joinRoomId, setJoinRoomId] = useState('');
+  const [showVersionModal, setShowVersionModal] = useState(false);
   
   // 创建房间时的设置弹窗状态
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -57,6 +59,14 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans text-slate-100 relative">
+      <button
+        type="button"
+        onClick={() => setShowVersionModal(true)}
+        className="absolute left-4 top-4 rounded-full border border-slate-600 bg-slate-800/80 px-3 py-1.5 text-sm font-bold text-emerald-300 shadow-lg transition hover:border-emerald-400 hover:bg-slate-800"
+      >
+        v1.0
+      </button>
+
       <div className="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-md border border-slate-700">
         <div className="flex items-center justify-center mb-8 gap-3 text-emerald-400">
           <Play size={40} />
@@ -91,7 +101,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
           <div>
             <label className="block text-sm font-medium text-slate-400 mb-2">创建新房间</label>
             <div className="flex gap-2">
-              <button onClick={() => handleOpenCreateModal(true)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition border bg-blue-600/20 border-blue-500 text-blue-400 hover:bg-blue-600/30">
+              <button data-testid="create-public-room" onClick={() => handleOpenCreateModal(true)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition border bg-blue-600/20 border-blue-500 text-blue-400 hover:bg-blue-600/30">
                 <Globe size={16} /> 创建公开房间
               </button>
               <button onClick={() => handleOpenCreateModal(false)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition border bg-rose-600/20 border-rose-500 text-rose-400 hover:bg-rose-600/30">
@@ -122,6 +132,31 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
         {errorMsg && <div className="mt-6 flex items-center gap-2 text-rose-400 bg-rose-400/10 p-3 rounded-lg text-sm border border-rose-400/20"><AlertCircle size={16} /> {errorMsg}</div>}
       </div>
 
+      {showVersionModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm border border-slate-600 overflow-hidden">
+            <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-900/50">
+              <h2 className="text-lg font-bold text-white">版本信息</h2>
+              <button onClick={() => setShowVersionModal(false)} className="text-slate-400 hover:text-white transition">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4 text-sm text-slate-300">
+              <div>
+                <div className="text-xl font-black text-emerald-300">德州扑克 v1.0</div>
+                <div className="mt-1 text-slate-500">首个稳定验收版本</div>
+              </div>
+              <p className="leading-relaxed">
+                支持公开与私密房间、多人德州扑克对局、桌面端与移动端布局、基础房间维护、下注流程与摊牌结算。
+              </p>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-slate-400">
+                版本日期：2026-04-29
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 创建房间时的设置确认弹窗 */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -141,7 +176,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
                     <button key={val} onClick={() => setSettings({...settings, initialChips: val})} className={`flex-1 py-2 rounded font-bold border transition ${settings.initialChips === val ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg' : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500'}`}>{val}</button>
                   ))}
                 </div>
-                <input type="number" min={MIN_INITIAL_CHIPS} max={MAX_INITIAL_CHIPS} value={settings.initialChips} onChange={e => setSettings(normalizeGameSettings({...settings, initialChips: e.target.value}))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-emerald-500" placeholder="自定义初始筹码" />
+                <input type="number" min={MIN_INITIAL_CHIPS} max={MAX_INITIAL_CHIPS} step={CHIP_UNIT} value={settings.initialChips} onChange={e => setSettings(normalizeGameSettings({...settings, initialChips: e.target.value}))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-emerald-500" placeholder="自定义初始筹码" />
               </div>
 
               <div>
@@ -173,7 +208,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
             </div>
 
             <div className="p-4 border-t border-slate-700 bg-slate-900/50">
-              <button onClick={handleConfirmCreate} className="w-full bg-emerald-600 hover:bg-emerald-500 transition rounded-lg font-bold py-3 shadow-lg">确认创建并进入房间</button>
+              <button data-testid="confirm-create-room" onClick={handleConfirmCreate} className="w-full bg-emerald-600 hover:bg-emerald-500 transition rounded-lg font-bold py-3 shadow-lg">确认创建并进入房间</button>
             </div>
           </div>
         </div>

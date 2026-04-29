@@ -1,13 +1,16 @@
 {
   "name": "my-poker-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
     "test:logic": "node scripts/logic-tests.mjs",
+    "smoke:quick": "node scripts/smoke/quick-room-smoke.mjs",
+    "smoke:multiway-layout": "node scripts/smoke/multiway-layout-smoke.mjs",
+    "smoke:transition": "node scripts/smoke/transition-layout-smoke.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
