@@ -6,6 +6,7 @@ import ActionDock from './ActionDock';
 export default function SelfPlayerPanel({
   actionDockProps,
   activeHighlights,
+  canEditPlayerChips,
   isDealer,
   isHost,
   isMyTurn,
@@ -45,7 +46,7 @@ export default function SelfPlayerPanel({
           )}
 
           {myIsWinnerGlow && (
-            <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 font-black px-5 py-2 rounded-full shadow-[0_5px_25px_rgba(251,191,36,0.8)] border-2 border-amber-300 bg-amber-500 text-white z-50 text-xl flex items-center gap-1 transition-all scale-110">
+            <div className="poker-self-win absolute -top-16 left-1/2 transform -translate-x-1/2 font-black px-5 py-2 rounded-full shadow-[0_5px_25px_rgba(251,191,36,0.8)] border-2 border-amber-300 bg-amber-500 text-white z-50 text-xl flex items-center gap-1 transition-all scale-110">
               <Coins size={20} /> +{myPlayerInfo.winAmount}
             </div>
           )}
@@ -70,7 +71,7 @@ export default function SelfPlayerPanel({
               {myPlayerInfo.waitingNextHand && <span className="text-amber-300 text-sm"> (下局加入)</span>}
               {myPlayerInfo.folded && !myPlayerInfo.waitingNextHand && <span className="text-rose-400 text-sm"> (已弃牌)</span>}
             </span>
-            {isHost && (
+            {canEditPlayerChips && (
               <button
                 onClick={onManageSelf}
                 className="text-slate-400 hover:text-amber-400 transition"

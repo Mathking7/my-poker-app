@@ -2,13 +2,28 @@ const SUITS = ['♠', '♥', '♣', '♦'];
 const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
 const RANK_NAMES = ['高牌', '一对', '两对', '三条', '顺子', '同花', '葫芦', '四条', '同花顺'];
 
+const getRandomInt = (maxExclusive) => {
+  if (maxExclusive <= 1) return 0;
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.getRandomValues) {
+    const range = 0x100000000;
+    const limit = range - (range % maxExclusive);
+    const buffer = new Uint32Array(1);
+    do {
+      cryptoApi.getRandomValues(buffer);
+    } while (buffer[0] >= limit);
+    return buffer[0] % maxExclusive;
+  }
+  return Math.floor(Math.random() * maxExclusive);
+};
+
 export const createDeck = () => {
   let deck = [];
   for (let s of SUITS) {
     for (let r of RANKS) deck.push(s + r);
   }
   for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = getRandomInt(i + 1);
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
   return deck;

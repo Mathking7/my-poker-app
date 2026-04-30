@@ -14,6 +14,7 @@ export default function ActionDock({
   fullPotSliderPosition,
   isMobileRaiseOpen,
   isTimerCritical,
+  timerProgress = 0,
   maxBet,
   minRaiseTarget,
   pot,
@@ -34,6 +35,8 @@ export default function ActionDock({
   const [isDraggingRaise, setIsDraggingRaise] = useState(false);
   const raiseSliderRef = useRef(null);
   const raiseSliderFill = Math.min(100, Math.max(0, Number(raiseSliderInput) || 0));
+  const timerFill = Math.min(100, Math.max(0, Number(timerProgress) || 0));
+  const showActionTimerBar = canTakeAction && timerFill > 0;
 
   const updateRaiseFromClientX = (clientX) => {
     if (!canRaiseNow || !raiseSliderRef.current) return;
@@ -84,8 +87,20 @@ export default function ActionDock({
           <div className="poker-action-status-label truncate font-black text-white">{actionStatusLabel}</div>
           <div className="poker-action-status-sub text-slate-400 text-xs">底池 {pot || 0} · 当前注 {currentBet || 0}</div>
         </div>
-        <div className={`poker-action-status-timer ${canTakeAction && isTimerCritical ? 'is-critical' : ''} flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-sm ${canTakeAction ? 'text-amber-300 bg-amber-950/50 border border-amber-500/30' : 'text-slate-400 bg-slate-800 border border-slate-700'}`}>
-          <Timer size={14} /> {actionStatusDetail}
+        <div
+          className={`poker-action-status-timer ${showActionTimerBar ? 'is-bar' : ''} ${canTakeAction && isTimerCritical ? 'is-critical' : ''} flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-sm ${canTakeAction ? 'text-amber-300 bg-amber-950/50 border border-amber-500/30' : 'text-slate-400 bg-slate-800 border border-slate-700'}`}
+          style={showActionTimerBar ? { '--timer-progress': `${timerFill}%` } : undefined}
+          aria-label={showActionTimerBar ? actionStatusDetail : undefined}
+        >
+          {showActionTimerBar ? (
+            <span className="poker-action-timebar" aria-hidden="true">
+              <span className="poker-action-timebar-fill" />
+            </span>
+          ) : (
+            <>
+              <Timer size={14} /> {actionStatusDetail}
+            </>
+          )}
         </div>
       </div>
 

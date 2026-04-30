@@ -133,6 +133,9 @@ async function collectLayout(page, label) {
         writingMode: getComputedStyle(element).writingMode,
       }))
       .filter((item) => isVisible(item.rect));
+    const visibleOpponentTimers = [...document.querySelectorAll('.poker-opponent-timer-ring')]
+      .map(rectFor)
+      .filter(isVisible);
     const textFitIssues = [...document.querySelectorAll(
       '.poker-main-actions button, .poker-action-status-label, .poker-action-status-timer, .poker-phase-pill, .poker-pot-pill, .poker-transition-card',
     )]
@@ -164,6 +167,8 @@ async function collectLayout(page, label) {
       transitionPot: overlaps(transition, pot),
       transitionActionDock: overlaps(transition, actionDock),
       transitionSelfPanel: overlaps(transition, selfPanel),
+      transitionOpponentAction: visibleActionBubbles.some((bubble) => overlaps(transition, bubble.rect)),
+      transitionOpponentTimer: visibleOpponentTimers.some((rect) => overlaps(transition, rect)),
       phasePot: overlaps(phase, pot),
       clockPot: overlaps(clock, pot),
       potVisibleOpponent: visibleOpponentCards.some((rect) => overlaps(pot, rect)),
@@ -194,6 +199,7 @@ async function collectLayout(page, label) {
       offscreenFixedElements,
       textFitIssues,
       visibleActionBubbles,
+      visibleOpponentTimers,
       rects,
     };
   }, { label, importantSelectors });
@@ -206,6 +212,8 @@ function layoutPasses(snapshot) {
     'transitionPot',
     'transitionActionDock',
     'transitionSelfPanel',
+    'transitionOpponentAction',
+    'transitionOpponentTimer',
     'phasePot',
     'clockPot',
     'potVisibleOpponent',

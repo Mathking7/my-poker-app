@@ -1,0 +1,18 @@
+/*
+ * Mobile layout guardrails.
+ *
+ * Keep narrowly-scoped responsive overrides here when they protect specific
+ * table regions from overlapping. The older global table styles still live in
+ * src/index.css; this file is imported after them so these contracts win.
+ */
+
+@media (orientation: portrait) and (max-width: 640px) {
+  /*
+   * Street/action transition banners are absolute overlays. In portrait they
+   * should sit below the community cards, away from opponent bet bubbles and
+   * the horizontally scrollable opponent strip.
+   */
+  .poker-transition-banner {
+    top: clamp(23.5rem, 50dvh, 26rem);
+  }
+}

@@ -1,8 +1,7 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { doc, setDoc, getDoc, getDocs, collection, onSnapshot, deleteDoc } from 'firebase/firestore';
 
-import { auth, db, globalAppId, isFirebaseInitialized } from './firebase';
+import { auth, isFirebaseInitialized } from './firebase';
 import Lobby from './components/Lobby';
 import PokerGame from './components/PokerGame';
 import {
@@ -14,6 +13,16 @@ import {
   stampPlayerPresence,
 } from './utils/roomMaintenance';
 import { MAX_PLAYERS, isJoinableStatus, normalizeGameSettings } from './utils/gameSettings';
+import { buildInitialRoomData, createRoomIdCandidate } from './utils/roomCreation';
+import { normalizePokerRoom } from './utils/pokerRoomSchema';
+import {
+  deleteRoomDocument,
+  getRoomSnapshot,
+  getRoomsSnapshot,
+  mergeRoomDocument,
+  runRoomTransaction,
+  subscribeRoom,
+} from './services/roomRepository';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -21,22 +30,18 @@ export default function App() {
   const [roomData, setRoomData] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const getRoomsRef = useCallback(() => {
-    return collection(db, 'artifacts', globalAppId, 'public', 'data', 'rooms');
-  }, []);
-
   const sweepExpiredRooms = useCallback(async () => {
     const now = Date.now();
-    const snapshot = await getDocs(getRoomsRef());
+    const snapshot = await getRoomsSnapshot();
     for (const roomDoc of snapshot.docs) {
       const data = roomDoc.data();
       if (isRoomExpired(data, now)) {
-        await deleteDoc(roomDoc.ref);
+        await deleteRoomDocument(roomDoc.ref);
       } else if (shouldMarkLegacyRoom(data)) {
-        await setDoc(roomDoc.ref, { presenceMigrationStartedAt: now, updatedAt: now }, { merge: true });
+        await mergeRoomDocument(roomDoc.ref, { presenceMigrationStartedAt: now, updatedAt: now });
       }
     }
-  }, [getRoomsRef]);
+  }, []);
 
   useEffect(() => {
     if (!isFirebaseInitialized) return;
@@ -59,10 +64,17 @@ export default function App() {
 
   useEffect(() => {
     if (!isFirebaseInitialized || !user || !activeRoomId) return;
-    const roomRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', activeRoomId);
-    const unsubscribe = onSnapshot(roomRef, (docSnap) => {
+    let isCurrentSubscription = true;
+    const unsubscribe = subscribeRoom(activeRoomId, (docSnap) => {
+      if (!isCurrentSubscription) return;
       if (docSnap.exists()) {
-        setRoomData(docSnap.data());
+        const nextRoomData = normalizePokerRoom(docSnap.data(), { roomId: activeRoomId });
+        if (nextRoomData.id !== activeRoomId) {
+          console.warn("Room id mismatch, ignoring stale room data", { activeRoomId, dataId: nextRoomData.id });
+          setRoomData(null);
+          return;
+        }
+        setRoomData(nextRoomData);
       } else {
         setErrorMsg('房间不存在或已解散');
         setActiveRoomId('');
@@ -71,23 +83,26 @@ export default function App() {
     }, (err) => {
       console.error("Snapshot Error:", err);
     });
-    return () => unsubscribe();
+    return () => {
+      isCurrentSubscription = false;
+      unsubscribe();
+    };
   }, [user, activeRoomId]);
 
   // 获取公开房间列表并清理僵尸房。私密房也在这里一起清理，只是不展示。
   const handleFetchPublicRooms = async (gameType = 'texas') => {
     try {
       const now = Date.now();
-      const snapshot = await getDocs(getRoomsRef());
+      const snapshot = await getRoomsSnapshot();
       const rooms = [];
       for (const d of snapshot.docs) {
-        const data = d.data();
+        const data = normalizePokerRoom(d.data(), { roomId: d.id });
         if (isRoomExpired(data, now)) {
-          await deleteDoc(d.ref);
+          await deleteRoomDocument(d.ref);
           continue;
         }
         if (shouldMarkLegacyRoom(data)) {
-          await setDoc(d.ref, { presenceMigrationStartedAt: now, updatedAt: now }, { merge: true });
+          await mergeRoomDocument(d.ref, { presenceMigrationStartedAt: now, updatedAt: now });
           continue;
         }
         if (data.isPublic && data.gameType === gameType && getActivePlayerCount(data, now) > 0) {
@@ -101,12 +116,19 @@ export default function App() {
     }
   };
 
-  const createUniqueRoomId = async () => {
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const candidate = String(Math.floor(1000 + Math.random() * 9000));
-      const roomRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', candidate);
-      const existingRoom = await getDoc(roomRef);
-      if (!existingRoom.exists()) return candidate;
+  const createRoomDocument = async (buildRoomData) => {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const candidate = createRoomIdCandidate();
+      const createdRoom = await runRoomTransaction(candidate, async (transaction, roomRef) => {
+        const existingRoom = await transaction.get(roomRef);
+        const now = Date.now();
+        if (existingRoom.exists() && !isRoomExpired(existingRoom.data(), now)) return null;
+
+        const data = buildRoomData(candidate, now);
+        transaction.set(roomRef, data);
+        return { id: candidate, data };
+      });
+      if (createdRoom) return createdRoom;
     }
     throw new Error('Unable to allocate a unique room id');
   };
@@ -114,80 +136,62 @@ export default function App() {
   const handleCreateRoom = async (playerName, gameType, isPublic, settings) => {
     if (!user) {
       setErrorMsg('登录尚未完成，请稍后再试');
-      return;
+      return false;
     }
     try {
-      const normalizedSettings = normalizeGameSettings(settings);
-      const newRoomId = await createUniqueRoomId();
-      const now = Date.now();
-      const initialData = {
-        id: newRoomId, 
-        hostUid: isPublic ? null : user.uid, 
-        creatorUid: user.uid,
-        createdAt: now,
-        updatedAt: now,
-        presenceMigrationStartedAt: null,
-        status: 'waiting', 
-        isPaused: false,
-        pot: 0, 
-        currentBet: 0,
-        minRaise: 20,
-        turnIndex: 0, 
-        dealerIndex: 0,
-        handCount: 0,
-        communityCards: [], 
-        deck: [], 
-        logs: [`房间创建成功 (房号: ${newRoomId})`],
+      const createdRoom = await createRoomDocument((newRoomId, now) => buildInitialRoomData({
+        roomId: newRoomId,
+        user,
+        playerName,
         gameType,
-        isPublic, 
-        settings: normalizedSettings, 
-        joinRequests: [], 
-        players: [stampPlayerPresence({ 
-          uid: user.uid, name: playerName, chips: normalizedSettings.initialChips,
-          hand: [], bet: 0, folded: false, allIn: false, hasActed: false, isSittingOut: false, waitingNextHand: false
-        }, now)]
-      };
-      await setDoc(doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', newRoomId), initialData);
-      setActiveRoomId(newRoomId);
+        isPublic,
+        settings,
+        now,
+      }));
+      setErrorMsg('');
+      setRoomData(createdRoom.data);
+      setActiveRoomId(createdRoom.id);
+      return true;
     } catch (err) {
       console.error("Create Room Error:", err);
       setErrorMsg('创建失败');
+      return false;
     }
   };
 
   const handleJoinRoom = async (playerName, joinRoomId) => {
-    if (!playerName.trim() || !joinRoomId.trim()) return;
+    const normalizedRoomId = joinRoomId.trim().toUpperCase();
+    if (!playerName.trim() || !normalizedRoomId) return false;
     if (!user) {
       setErrorMsg('登录尚未完成，请稍后再试');
-      return;
+      return false;
     }
     try {
       const now = Date.now();
-      const roomRef = doc(db, 'artifacts', globalAppId, 'public', 'data', 'rooms', joinRoomId);
-      const docSnap = await getDoc(roomRef);
+      const docSnap = await getRoomSnapshot(normalizedRoomId);
       if (docSnap.exists()) {
-        const data = docSnap.data();
+        const data = normalizePokerRoom(docSnap.data(), { roomId: normalizedRoomId });
         const roomSettings = normalizeGameSettings(data.settings);
         const players = data.players || [];
         const existingPlayer = players.find(p => p.uid === user.uid);
         if (isRoomExpired(data, now)) {
-          await deleteDoc(roomRef);
+          await deleteRoomDocument(normalizedRoomId);
           setErrorMsg('房间已过期并被清理');
-          return;
+          return false;
         }
         if (!existingPlayer && players.length >= MAX_PLAYERS) {
           setErrorMsg('房间人数已满');
-          return;
+          return false;
         }
         if (!existingPlayer && !isJoinableStatus(data.status) && !roomSettings.allowJoinDuringGame) {
           setErrorMsg('该房间正在对局中，且不允许中途加入');
-          return;
+          return false;
         }
         if (!data.isPublic && !data.hostUid) {
           const activeHost = players.find(p => isPlayerActive(p, now, null, data));
           if (activeHost) {
             data.hostUid = activeHost.uid;
-            await setDoc(roomRef, { hostUid: activeHost.uid, updatedAt: now }, { merge: true });
+            await mergeRoomDocument(normalizedRoomId, { hostUid: activeHost.uid, updatedAt: now });
           }
         }
         if (!data.isPublic && data.hostUid && !existingPlayer) {
@@ -196,9 +200,11 @@ export default function App() {
            const newRequests = existingRequests.some(req => req.uid === user.uid)
              ? existingRequests.map(req => req.uid === user.uid ? { ...req, ...nextRequest } : req)
              : [...existingRequests, nextRequest];
-           await setDoc(roomRef, { joinRequests: newRequests, updatedAt: now }, { merge: true });
-           setActiveRoomId(joinRoomId); 
-           return;
+           await mergeRoomDocument(normalizedRoomId, { joinRequests: newRequests, updatedAt: now });
+           setErrorMsg('');
+           setRoomData(null);
+           setActiveRoomId(normalizedRoomId);
+           return true;
         }
         if (existingPlayer) {
           const newPlayers = players.map(p => {
@@ -213,7 +219,7 @@ export default function App() {
               waitingNextHand: isMidHand,
             }, now);
           });
-          await setDoc(roomRef, { players: newPlayers, updatedAt: now }, { merge: true });
+          await mergeRoomDocument(normalizedRoomId, { players: newPlayers, updatedAt: now });
         } else {
           const isMidHand = !isJoinableStatus(data.status);
           const newPlayers = [...players, { 
@@ -221,20 +227,32 @@ export default function App() {
             hand: [], bet: 0, folded: isMidHand, allIn: false, hasActed: isMidHand, isSittingOut: false, waitingNextHand: isMidHand,
             lastSeenAt: now, disconnectedAt: null, isOnline: true
           }];
-          await setDoc(roomRef, { players: newPlayers, settings: roomSettings, logs: [...(data.logs || []), `${playerName} ${isMidHand ? '加入观战，将在下一局入座。' : '加入了房间。'}`], updatedAt: now }, { merge: true });
+          await mergeRoomDocument(normalizedRoomId, { players: newPlayers, settings: roomSettings, logs: [...(data.logs || []), `${playerName} ${isMidHand ? '加入观战，将在下一局入座。' : '加入了房间。'}`], updatedAt: now });
         }
-        setActiveRoomId(joinRoomId);
+        setErrorMsg('');
+        setRoomData(null);
+        setActiveRoomId(normalizedRoomId);
+        return true;
       } else {
         setErrorMsg('房间不存在');
+        return false;
       }
     } catch (err) {
       console.error("Join Room Error:", err);
       setErrorMsg('加入失败');
+      return false;
     }
   };
 
-  if (!activeRoomId || !roomData) {
+  const activeRoomData = roomData?.id === activeRoomId && Array.isArray(roomData?.players) ? roomData : null;
+  const handleLeaveRoom = () => {
+    setActiveRoomId('');
+    setRoomData(null);
+    setErrorMsg('');
+  };
+
+  if (!activeRoomId || !activeRoomData) {
     return <Lobby onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} onFetchPublicRooms={handleFetchPublicRooms} errorMsg={errorMsg} />;
   }
-  return <PokerGame user={user} roomId={activeRoomId} roomData={roomData} onLeaveRoom={() => setActiveRoomId('')} />;
+  return <PokerGame user={user} roomId={activeRoomId} roomData={activeRoomData} onLeaveRoom={handleLeaveRoom} />;
 }

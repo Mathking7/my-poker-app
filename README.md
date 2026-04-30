@@ -1,16 +1,15 @@
 # My Poker App
 
-一个基于 Vite + React + Firebase 的多人德州扑克房间应用。当前支持公开/私密房间、匿名登录、实时房间状态同步、盲注与下注流程、全下发牌、摊牌结算、分池、掉线维护、移动端/桌面端响应式牌桌。
+一个基于 Vite + React + Firebase 的多人德州扑克房间应用。当前支持公开/私密房间、匿名登录、实时房间同步、移动端/桌面端牌桌、下注流程、全下亮牌、分池结算、房间清理、暂停恢复、AI 玩家和浏览器 smoke 测试。
 
 ## 快速开始
 
-安装依赖：
-
 ```powershell
 npm install
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-创建 `.env`，填入 Firebase Web App 配置：
+`.env` 需要配置 Firebase Web App 变量：
 
 ```text
 VITE_FIREBASE_API_KEY=
@@ -21,13 +20,7 @@ VITE_FIREBASE_MESSAGING_SENDER_ID=
 VITE_FIREBASE_APP_ID=
 ```
 
-本地运行：
-
-```powershell
-npm run dev -- --host 127.0.0.1 --port 5173
-```
-
-常规验证：
+提交或部署前至少运行：
 
 ```powershell
 npm run lint
@@ -35,37 +28,37 @@ npm run test:logic
 npm run build
 ```
 
-## 项目结构
+## 目录结构
 
 ```text
-src/App.jsx                    Firebase 登录、房间创建/加入、房间订阅
-src/components/Lobby.jsx       大厅、建房、公开房间列表、手动入房
-src/components/PokerGame.jsx   对局控制器：房间写入、发牌、下注、结算、维护调度
-src/components/poker/          牌桌展示组件，尽量只接收 props，不直接写 Firestore
-src/utils/gameFlow.js          德州扑克流程、过场、加注合法性、分池
-src/utils/pokerLogic.jsx       牌堆与牌型评估
-src/utils/roomMaintenance.js   心跳、掉线、房间过期、房主迁移
-src/utils/gameSettings.js      房间设置默认值、边界和规范化
-src/utils/chipMath.js          筹码单位与取整
-src/utils/pokerViewState.js    操作栏/计时器等视图状态推导
-scripts/logic-tests.mjs        纯逻辑回归测试
-scripts/smoke/                 Playwright 浏览器烟测框架
+src/App.jsx                         登录、房间创建/加入、房间订阅
+src/components/Lobby.jsx            大厅与房间入口
+src/components/PokerGame.jsx        对局控制器和 Firestore 写入协调
+src/components/poker/               牌桌展示组件
+src/hooks/                          计时器、过场、摊牌、AI 调度、房间维护等生命周期逻辑
+src/services/roomRepository.js      Firestore 房间读写入口
+src/utils/gameFlow.js               牌局流程、下注、过场、分池等纯规则
+src/utils/pokerGameEngine.js        动作提交、推进、防重复提交辅助
+src/utils/pokerAi.jsx               AI 策略与牌力估算
+src/utils/pokerRoomSchema.js        Firestore 房间数据内存规范化
+src/styles/                         响应式样式维护说明与移动端覆盖规则
+scripts/logic-tests.mjs             纯逻辑回归测试
+scripts/smoke/                      Playwright 浏览器 smoke 测试
 ```
-
-更详细的架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。测试与烟测说明见 [docs/TESTING.md](docs/TESTING.md)。
 
 ## 维护原则
 
-- 规则逻辑优先放在 `src/utils/*`，保持可测试。
-- UI 展示优先放在 `src/components/poker/*`，避免继续扩大 `PokerGame.jsx`。
-- Firestore 写入集中留在 `App.jsx` 和 `PokerGame.jsx`，展示组件不直接访问数据库。
-- 所有筹码金额必须经过 `CHIP_UNIT = 10` 的单位约束。
-- 修改房间清理、下注、结算、全下或分池逻辑后，必须跑 `npm run test:logic`。
-- 修改响应式牌桌或过场提示后，建议跑 `npm run smoke:transition`；涉及多人座位、对手栏、底部操作区时再跑 `npm run smoke:multiway-layout`。
+- 规则优先放在 `src/utils/*`，保持可测试。
+- React 生命周期副作用优先放在 `src/hooks/*`，避免继续扩大 `PokerGame.jsx`。
+- 展示组件放在 `src/components/poker/*`，尽量只接收 props，不直接访问 Firebase。
+- Firestore 访问集中在 `src/services/roomRepository.js`。
+- 房间数据进入 UI 前经过 `normalizePokerRoom`，减少旧字段/缺字段导致的散落判断。
+- 筹码金额必须走 `CHIP_UNIT = 10` 的单位约束。
+- 修改移动端布局后运行 `smoke:transition`、`smoke:multiway-layout` 或 `smoke:mobile-opponents`。
 
 ## 部署
 
-项目包含 `vercel.json`，Vercel 构建配置为：
+Vercel 使用：
 
 ```text
 buildCommand: npm run build
@@ -73,10 +66,11 @@ outputDirectory: dist
 framework: vite
 ```
 
-Vercel 中需要配置与 `.env` 相同的 `VITE_FIREBASE_*` 环境变量。生产部署前请至少通过：
+Vercel 环境变量需要与本地 `.env` 中的 `VITE_FIREBASE_*` 一致。部署前确认 lint、逻辑测试和构建通过。
 
-```powershell
-npm run lint
-npm run test:logic
-npm run build
-```
+更多说明见：
+
+- [架构文档](docs/ARCHITECTURE.md)
+- [测试文档](docs/TESTING.md)
+- [部署流程](docs/DEPLOYMENT.md)
+- [浏览器 smoke 说明](scripts/smoke/README.md)

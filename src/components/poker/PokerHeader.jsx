@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, LogOut, Pause, Play, PlayCircle, Settings } from 'lucide-react';
+import { Bot, CheckCircle2, Copy, LogOut, Pause, Play, PlayCircle, Settings } from 'lucide-react';
 
 export default function PokerHeader({
   roomId,
@@ -9,7 +9,10 @@ export default function PokerHeader({
   transitionPhaseInfo,
   activeTransition,
   isHost,
+  canManageRoom,
+  canAddAi,
   onCopyRoomId,
+  onAddAiPlayer,
   onTogglePause,
   onOpenSettings,
   onLeave,
@@ -48,6 +51,17 @@ export default function PokerHeader({
       </div>
 
       <div className="poker-header-actions flex items-center gap-4">
+        {canManageRoom && (
+          <button
+            onClick={onAddAiPlayer}
+            disabled={!canAddAi}
+            title={canAddAi ? '加入 AI 玩家' : '房间人数已满'}
+            className="poker-header-button text-slate-300 hover:text-emerald-300 disabled:text-slate-600 disabled:cursor-not-allowed flex items-center gap-1 text-sm"
+          >
+            <Bot size={16} />
+            <span className="poker-header-action-text">加入AI</span>
+          </button>
+        )}
         {isHost && (
           <button
             onClick={onTogglePause}

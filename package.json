@@ -1,7 +1,7 @@
 {
   "name": "my-poker-app",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,8 +9,15 @@
     "lint": "eslint .",
     "test:logic": "node scripts/logic-tests.mjs",
     "smoke:quick": "node scripts/smoke/quick-room-smoke.mjs",
+    "smoke:ai": "node scripts/smoke/ai-player-smoke.mjs",
+    "smoke:ai-single-action": "node scripts/smoke/ai-single-action-smoke.mjs",
+    "smoke:allin-current-round": "node scripts/smoke/allin-current-round-smoke.mjs",
+    "smoke:chip-queue": "node scripts/smoke/chip-queue-smoke.mjs",
     "smoke:multiway-layout": "node scripts/smoke/multiway-layout-smoke.mjs",
+    "smoke:mobile-opponents": "node scripts/smoke/mobile-opponents-smoke.mjs",
+    "smoke:pause-transition": "node scripts/smoke/pause-transition-smoke.mjs",
     "smoke:raise-slider": "node scripts/smoke/raise-slider-smoke.mjs",
+    "smoke:room-create-isolation": "node scripts/smoke/room-create-isolation-smoke.mjs",
     "smoke:transition": "node scripts/smoke/transition-layout-smoke.mjs",
     "preview": "vite preview"
   },

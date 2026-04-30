@@ -20,6 +20,11 @@ const viewports = [
 const browser = await launchSmokeBrowser();
 const results = [];
 
+const intersectsAny = (box, boxes = []) => boxes.some((item) => intersects(box, item));
+const bottomEdge = (box, height = 12) => (
+  box ? { ...box, top: Math.max(box.top, box.bottom - height) } : null
+);
+
 try {
   for (const viewport of viewports) {
     const hostContext = await createSmokeContext(browser, viewport);
@@ -45,6 +50,9 @@ try {
         startOverSelfPanelBeforeStart: intersects(waitingBoxes.startButton, waitingBoxes.selfPanel),
         transitionOverCommunity: intersects(boxes.transitionBanner, boxes.community),
         transitionOverOpponent: intersects(boxes.transitionBanner, boxes.opponent),
+        transitionOverOpponentAction: intersectsAny(boxes.transitionBanner, boxes.opponentActionBubbles),
+        transitionOverOpponentTimer: intersectsAny(boxes.transitionBanner, boxes.opponentTimers),
+        transitionOverOpponentStrip: intersects(boxes.transitionBanner, bottomEdge(boxes.opponentsStrip)),
         transitionOverPot: intersects(boxes.transitionBanner, boxes.pot),
         horizontalOverflow: await hostPage.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
         screenshot,
@@ -65,6 +73,9 @@ const ok = results.every((result) => (
   !result.startOverSelfPanelBeforeStart &&
   !result.transitionOverCommunity &&
   !result.transitionOverOpponent &&
+  !result.transitionOverOpponentAction &&
+  !result.transitionOverOpponentTimer &&
+  !result.transitionOverOpponentStrip &&
   !result.transitionOverPot &&
   !result.horizontalOverflow
 ));

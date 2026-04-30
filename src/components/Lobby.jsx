@@ -5,14 +5,26 @@ import { DEFAULT_SETTINGS, MAX_INITIAL_CHIPS, MAX_TIME_LIMIT, MIN_INITIAL_CHIPS,
 
 const VERSION_HISTORY = [
   {
+    version: 'v1.2',
+    title: 'AI 玩家与维护性升级',
+    date: '2026-05-01',
+    summary: '房间内可以加入 AI 玩家，并对项目结构、移动端显示和关键流程稳定性进行了系统整理。',
+    changes: [
+      '新增房间内加入 AI 玩家入口，AI 会根据牌力、底池赔率和筹码压力快速参与对局。',
+      '支持私密房房主为玩家设置下一局筹码调整。',
+      '整理计时器、过场、摊牌展示、AI 调度和房间数据规范化逻辑，提升后续维护稳定性。',
+      '优化移动端过场提示、多人对手滚动和部分对局流程体验。',
+      '其它界面和流程优化。',
+    ],
+  },
+  {
     version: 'v1.1',
     title: '加注滑块体验更新',
     date: '2026-04-29',
     summary: '优化加注操作，让下注选择更顺手。',
     changes: [
       '优化加注滑块手感。',
-      '加注输入框显示本次新增下注额，而不是总下注额。',
-      '版本信息保留历史更新记录。',
+      '加注输入框显示本次新增下注额。',
     ],
   },
   {
@@ -39,6 +51,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
   // 创建房间时的设置弹窗状态
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isCreatingPublic, setIsCreatingPublic] = useState(true);
+  const [isCreateSubmitting, setIsCreateSubmitting] = useState(false);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
   // 公开房间列表弹窗状态
@@ -53,9 +66,15 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
     setShowCreateModal(true);
   };
 
-  const handleConfirmCreate = () => {
-    onCreateRoom(playerName, gameType, isCreatingPublic, normalizeGameSettings(settings));
-    setShowCreateModal(false);
+  const handleConfirmCreate = async () => {
+    if (isCreateSubmitting) return;
+    setIsCreateSubmitting(true);
+    try {
+      const created = await onCreateRoom(playerName, gameType, isCreatingPublic, normalizeGameSettings(settings));
+      if (created) setShowCreateModal(false);
+    } finally {
+      setIsCreateSubmitting(false);
+    }
   };
 
   const handleAction = (actionFn, ...args) => {
@@ -129,7 +148,7 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
               <button data-testid="create-public-room" onClick={() => handleOpenCreateModal(true)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition border bg-blue-600/20 border-blue-500 text-blue-400 hover:bg-blue-600/30">
                 <Globe size={16} /> 创建公开房间
               </button>
-              <button onClick={() => handleOpenCreateModal(false)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition border bg-rose-600/20 border-rose-500 text-rose-400 hover:bg-rose-600/30">
+              <button data-testid="create-private-room" onClick={() => handleOpenCreateModal(false)} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-bold transition border bg-rose-600/20 border-rose-500 text-rose-400 hover:bg-rose-600/30">
                 <Lock size={16} /> 创建私密房间
               </button>
             </div>
@@ -247,7 +266,14 @@ export default function Lobby({ onCreateRoom, onJoinRoom, onFetchPublicRooms, er
             </div>
 
             <div className="p-4 border-t border-slate-700 bg-slate-900/50">
-              <button data-testid="confirm-create-room" onClick={handleConfirmCreate} className="w-full bg-emerald-600 hover:bg-emerald-500 transition rounded-lg font-bold py-3 shadow-lg">确认创建并进入房间</button>
+              <button
+                data-testid="confirm-create-room"
+                onClick={handleConfirmCreate}
+                disabled={isCreateSubmitting}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-wait transition rounded-lg font-bold py-3 shadow-lg"
+              >
+                {isCreateSubmitting ? '创建中...' : '确认创建并进入房间'}
+              </button>
             </div>
           </div>
         </div>

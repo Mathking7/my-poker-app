@@ -2,80 +2,93 @@
 
 ## Runtime Flow
 
-1. `src/App.jsx` 初始化 Firebase、匿名登录、创建/加入房间，并订阅当前房间文档。
-2. `src/components/Lobby.jsx` 处理大厅 UI，包括公开/私密房间创建、公开房间浏览和手动加入。
-3. `src/components/PokerGame.jsx` 是对局控制器，负责会改变房间状态的动作：开始手牌、弃牌、跟注、加注、过场推进、摊牌结算、房主操作、玩家离开、掉线维护。
-4. `src/components/poker/*` 负责展示牌桌、对手、自身面板、动作栏、过场提示和日志抽屉。
-5. `src/utils/*` 放可复用、可测试的纯逻辑。
+1. `src/App.jsx` signs the user in anonymously, creates or joins rooms, subscribes to the active room document, normalizes room data, and hands it to the game UI.
+2. `src/components/PokerGame.jsx` coordinates room writes and passes derived state to focused table components.
+3. `src/components/poker/*` renders the table, cards, opponents, center board, action dock, logs, settings, and transition banner.
+4. `src/hooks/*` owns React lifecycle side effects such as local timers, transition presentation, showdown reveal, AI scheduling, presence heartbeats, and maintenance polling.
+5. `src/utils/*` contains pure rules and deterministic helpers that can be tested without a browser.
 
-Firestore 房间路径：
+Firestore room path:
 
 ```text
 artifacts/{globalAppId}/public/data/rooms/{roomId}
 ```
 
-`globalAppId` 定义在 `src/firebase.js`。
+## Boundaries
 
-## Core Boundaries
+### Firestore
 
-### Firestore Boundary
+`src/services/roomRepository.js` is the Firestore access layer. Components should use this service rather than importing `firebase/firestore` directly.
 
-Firestore 写入应集中在：
+`src/App.jsx` subscribes to a room and calls `normalizePokerRoom` before storing it in React state. This keeps old or incomplete room documents from leaking malformed values into UI and rules code.
 
-- `src/App.jsx`
-- `src/components/PokerGame.jsx`
+### Room Schema
 
-展示组件不直接导入 `firebase`，也不直接调用 `setDoc` / `deleteDoc`。它们通过 props 接收状态和回调。
+`src/utils/pokerRoomSchema.js` is an in-memory normalizer, not a migration writer. It fills defaults for room and player fields, normalizes settings, and preserves unknown fields so older rooms remain compatible.
 
-### Poker Rules Boundary
+Update `src/types/pokerRoom.js` when shared Firestore fields are added.
 
-德州扑克规则相关逻辑优先进入：
+### Poker Rules
 
-- `src/utils/gameFlow.js`
-- `src/utils/pokerLogic.jsx`
-- `src/utils/chipMath.js`
+Core Texas Hold'em rules live in:
 
-这些文件应保持无 React 依赖，方便 `scripts/logic-tests.mjs` 直接测试。
+```text
+src/utils/gameFlow.js
+src/utils/pokerGameEngine.js
+src/utils/pokerLogic.jsx
+src/utils/chipMath.js
+```
 
-### View-State Boundary
+UI code should not duplicate all-in, min-raise, side-pot, odd-chip, turn-order, or action-availability rules. Add tests in `scripts/logic-tests.mjs` when changing these helpers.
 
-非规则、但会被多个组件共享的界面推导进入：
+### Presentation Hooks
 
-- `src/utils/pokerUi.js`
-- `src/utils/pokerViewState.js`
+The main game component now delegates local presentation clocks:
 
-例如动作栏显示文案、当前计时器是否危险、按钮是否可用等。
+```text
+useTurnTimer                 local countdown and timeout action trigger
+usePresentedTransition       server transition mirrored into stable local animation time
+useTransitionCompletion      manager-only transition completion and auto-advance
+useShowdownPresentation      reveal sequence, highlight cards, winner display state
+useAiTurnScheduler           AI think delay, transition wait, and one-action scheduling
+```
 
-## Component Layout
+These hooks keep `PokerGame.jsx` focused on orchestration instead of carrying every timer and animation effect inline.
 
-`src/components/poker/` 中的组件职责：
+### AI
 
-- `PokerHeader.jsx`: 顶部房号、盲注、暂停、设置、退出。
-- `JoinRequestsBar.jsx`: 私密房间加入申请。
-- `TransitionBanner.jsx`: 轮次/发牌/结算过场提示。
-- `OpponentCard.jsx`: 对手头像、手牌、下注气泡、胜利气泡。
-- `TableCenter.jsx`: 当前轮次、奖池、公共牌、分池结算面板。
-- `SelfPlayerPanel.jsx`: 自己的手牌、码量、坐下/观战、自身下注/获胜显示。
-- `ActionDock.jsx`: 永远可见的弃牌/看牌/跟注/加注动作区。
-- `GameLogDrawer.jsx`: 侧滑对局日志。
+AI has three conceptual layers:
 
-新增 UI 时优先落在这个目录下；只有需要写房间状态的逻辑才放回 `PokerGame.jsx`。
+```text
+src/utils/pokerAi.jsx        strategy, range/EV estimation, action choice
+src/utils/pokerAiTurn.js     pure scheduling identity helpers
+src/hooks/useAiTurnScheduler.js  browser-side execution scheduling and Firestore commit
+```
+
+The AI scheduler waits for pauses and transitions to clear before committing one action. `getAiActionKey` defines the duplicate-action guard and is covered by logic tests.
+
+### Styling
+
+Styles load in this order:
+
+```text
+src/index.css
+src/styles/poker-mobile-layout.css
+```
+
+`index.css` remains the legacy global poker stylesheet. New narrow mobile collision fixes should go into `poker-mobile-layout.css` with comments explaining the protected layout contract.
 
 ## Room Maintenance
 
-浏览器没有可靠的 Firestore `onDisconnect`。本项目使用心跳维护：
+Browsers do not provide a reliable Firestore disconnect hook, so the app uses heartbeats:
 
-- 客户端约每 15 秒写入自己的 `lastSeenAt`。
-- 玩家 45 秒无心跳会被视为 stale。
-- 无活跃玩家的房间 3 分钟后过期。
-- 活跃房间内由选举出的维护客户端标记掉线玩家、必要时自动弃牌，并迁移私密房间房主。
+- Active clients write `lastSeenAt`.
+- Stale players are detected after the configured timeout.
+- Empty rooms expire after the room TTL.
+- One elected maintenance client marks stale players offline, folds blocking players, advances stuck hands, and transfers private-room host rights.
 
-相关逻辑在 `src/utils/roomMaintenance.js`，回归测试在 `scripts/logic-tests.mjs`。
+Maintenance rules live in `src/utils/roomMaintenance.js` and are tested in `scripts/logic-tests.mjs`.
 
-## Coding Guidelines
+## Deployment Shape
 
-- 不要在展示组件里复制下注、分池、全下等规则。
-- 不要绕过 `normalizeGameSettings` 保存房间设置。
-- 不要绕过 `quantizeChipAmount` / `clampRaiseAmount` 写筹码金额。
-- 修改移动端或横屏布局时，优先检查 `.poker-*` 语义类，而不是散落增加 Tailwind 覆盖。
-- 大改前先备份，备份文件放在 `D:\codexroot` 或项目外部目录。
+This is a static Vite app deployed to Vercel. AI runs in the browser with a worker fallback; no separate backend server is required for the current architecture.

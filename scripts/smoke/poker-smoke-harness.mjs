@@ -52,12 +52,13 @@ export async function createSmokeContext(browser, viewport) {
   });
 }
 
-export async function createRoom(page, playerName = `Host${Date.now() % 10000}`) {
+export async function createRoom(page, playerName = `Host${Date.now() % 10000}`, options = {}) {
+  const isPublic = options.isPublic !== false;
   await page.goto(smokeConfig.baseUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('input[type="text"]', { timeout: 30_000 });
   await page.locator('input[type="text"]').first().fill(playerName);
   await sleep(smokeConfig.authWaitMs);
-  await page.locator('[data-testid="create-public-room"]').click();
+  await page.locator(isPublic ? '[data-testid="create-public-room"]' : '[data-testid="create-private-room"]').click();
   await page.waitForSelector('[data-testid="confirm-create-room"]', { timeout: 10_000 });
   await page.locator('[data-testid="confirm-create-room"]').click();
   await page.waitForSelector('.poker-room-chip', { timeout: 30_000 });
@@ -81,7 +82,7 @@ export async function clickIfEnabled(page, selector) {
   if (!handle) return false;
   const disabled = await handle.evaluate((element) => element.disabled || element.getAttribute('aria-disabled') === 'true');
   if (disabled) return false;
-  await handle.click().catch(() => {});
+  await handle.click({ force: true }).catch(() => {});
   return true;
 }
 
@@ -105,6 +106,22 @@ export async function getRect(page, selector) {
   }, selector);
 }
 
+export async function getRects(page, selector) {
+  return page.evaluate((sel) => (
+    [...document.querySelectorAll(sel)].map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
+    }).filter((rect) => rect.width > 0 && rect.height > 0)
+  ), selector);
+}
+
 export async function startHand(page) {
   await page.waitForSelector('.poker-board-center button:not([disabled])', { timeout: 30_000 });
   await page.locator('.poker-board-center button:not([disabled])').first().click();
@@ -120,10 +137,12 @@ export async function driveToStreetTransition(pages) {
     }).catch(() => false);
     if (reached) return true;
 
+    let clicked = false;
     for (const page of pages) {
-      await clickIfEnabled(page, '.poker-call-button:not([disabled])');
+      clicked = await clickIfEnabled(page, '.poker-call-button:not([disabled])');
+      if (clicked) break;
     }
-    await sleep(250);
+    await sleep(clicked ? 700 : 250);
   }
   return false;
 }
@@ -133,6 +152,9 @@ export async function getCommonLayoutBoxes(page) {
     transitionBanner: await getRect(page, '.poker-transition-banner'),
     community: await getRect(page, '.poker-community-cards'),
     opponent: await getRect(page, '.poker-opponent-card'),
+    opponentActionBubbles: await getRects(page, '.poker-opponent-bet, .poker-opponent-win'),
+    opponentTimers: await getRects(page, '.poker-opponent-timer-ring'),
+    opponentsStrip: await getRect(page, '.poker-opponents-strip'),
     pot: await getRect(page, '.poker-pot-pill'),
     selfPanel: await getRect(page, '.poker-self-panel'),
     startButton: await getRect(page, '.poker-board-center button:not([disabled])'),

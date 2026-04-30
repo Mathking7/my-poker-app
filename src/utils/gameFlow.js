@@ -2,13 +2,13 @@ import { CHIP_UNIT, quantizeChipAmount, toFiniteNumber } from './chipMath.js';
 
 export const TRANSITION_TIMING = {
   handStartMs: 1350,
-  actionHoldMs: 1250,
+  actionHoldMs: 1100,
   streetBaseMs: 1300,
   streetCardGapMs: 420,
   showdownIntroMs: 1800,
   showdownRevealMs: 1800,
   winnerHoldMs: 3900,
-  transitionCompletionGraceMs: 450,
+  transitionCompletionGraceMs: 250,
 };
 
 export const PHASE_INFO = {
@@ -71,6 +71,7 @@ export const getTransitionDuration = ({ type, toStatus, cardCount = 0 }) => {
 };
 
 export const createGameTransition = ({
+  id = null,
   type,
   fromStatus = null,
   toStatus,
@@ -82,7 +83,7 @@ export const createGameTransition = ({
 }) => {
   const durationMs = getTransitionDuration({ type, toStatus, cardCount });
   return {
-    id: `${now}-${type}-${fromStatus || 'none'}-${toStatus}`,
+    id: id || `${now}-${type}-${fromStatus || 'none'}-${toStatus}`,
     type,
     fromStatus,
     toStatus,
@@ -269,6 +270,11 @@ export const getFullPotSliderMark = ({ fullPotRaiseTarget = 0, minRaiseTarget = 
   };
 };
 
+const getTrackedContribution = (player) => quantizeChipAmount(
+  player?.totalContribution != null ? player.totalContribution : (player?.bet || 0),
+  'floor',
+);
+
 export const getPlayerBettingOptions = (room, playerOrUid) => {
   const players = room?.players || [];
   const player = typeof playerOrUid === 'string'
@@ -278,20 +284,28 @@ export const getPlayerBettingOptions = (room, playerOrUid) => {
   if (!room || !player) {
     return {
       callAmount: 0,
+      rawCallAmount: 0,
+      effectiveCallAmount: 0,
       maxBet: 0,
       minRaiseSize: CHIP_UNIT * 2,
       minRaiseTarget: 0,
       potAfterCall: 0,
+      potAfterEffectiveCall: 0,
+      contestablePotAfterCall: 0,
       canRaise: false,
       hasOpponentToRaiseAgainst: false,
       facingShortAllInAfterActing: false,
+      isCallingAllIn: false,
+      isFacingCoveringAllIn: false,
     };
   }
 
   const currentBet = quantizeChipAmount(room.currentBet || 0, 'floor');
   const playerBet = quantizeChipAmount(player.bet || 0, 'floor');
   const playerChips = quantizeChipAmount(player.chips || 0, 'floor');
-  const callAmount = Math.max(0, currentBet - playerBet);
+  const rawCallAmount = Math.max(0, currentBet - playerBet);
+  const effectiveCallAmount = Math.min(rawCallAmount, playerChips);
+  const callAmount = effectiveCallAmount;
   const maxBet = playerBet + playerChips;
   const minRaiseSize = Math.max(CHIP_UNIT, quantizeChipAmount(room.minRaise || CHIP_UNIT * 2, 'ceil'));
   const minRaiseTarget = Math.min(currentBet + minRaiseSize, maxBet);
@@ -306,16 +320,36 @@ export const getPlayerBettingOptions = (room, playerOrUid) => {
   ));
   const facingShortAllInAfterActing = Boolean(
     player.hasActed &&
-    callAmount > 0 &&
-    callAmount < minRaiseSize
+    rawCallAmount > 0 &&
+    rawCallAmount < minRaiseSize
+  );
+  const isCallingAllIn = rawCallAmount > 0 && playerChips > 0 && effectiveCallAmount >= playerChips;
+  const isFacingCoveringAllIn = rawCallAmount > effectiveCallAmount;
+  const potAfterEffectiveCall = quantizeChipAmount((room.pot || 0) + effectiveCallAmount, 'floor');
+  const playerContributionAfterCall = getTrackedContribution(player) + effectiveCallAmount;
+  const trackedPotAfterCall = players.reduce((sum, candidate) => (
+    sum + getTrackedContribution(candidate) + (candidate.uid === player.uid ? effectiveCallAmount : 0)
+  ), 0);
+  const untrackedDeadPot = Math.max(0, potAfterEffectiveCall - trackedPotAfterCall);
+  const contestablePotAfterCall = Math.min(
+    potAfterEffectiveCall,
+    quantizeChipAmount(players.reduce((sum, candidate) => {
+      const contributionAfterCall = getTrackedContribution(candidate) +
+        (candidate.uid === player.uid ? effectiveCallAmount : 0);
+      return sum + Math.min(contributionAfterCall, playerContributionAfterCall);
+    }, untrackedDeadPot), 'floor'),
   );
 
   return {
     callAmount,
+    rawCallAmount,
+    effectiveCallAmount,
     maxBet,
     minRaiseSize,
     minRaiseTarget,
-    potAfterCall: quantizeChipAmount((room.pot || 0) + callAmount, 'floor'),
+    potAfterCall: potAfterEffectiveCall,
+    potAfterEffectiveCall,
+    contestablePotAfterCall,
     canRaise: Boolean(
       !player.folded &&
       !player.allIn &&
@@ -327,6 +361,8 @@ export const getPlayerBettingOptions = (room, playerOrUid) => {
     ),
     hasOpponentToRaiseAgainst,
     facingShortAllInAfterActing,
+    isCallingAllIn,
+    isFacingCoveringAllIn,
   };
 };
 

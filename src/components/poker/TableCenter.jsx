@@ -7,7 +7,6 @@ export default function TableCenter({
   activeHighlights,
   activeSeatedPlayers,
   canStartGame,
-  currentActionName,
   displayPotAmount,
   isTimerCritical,
   newCommunityStartIndex,
@@ -45,8 +44,11 @@ export default function TableCenter({
               <span key={displayPotAmount} className="poker-pot-amount text-4xl font-black text-amber-400 flex items-center gap-2 pot-pulse"><Coins size={28} /> {displayPotAmount}</span>
             </div>
             {showCurrentActionClock && (
-              <div className={`poker-table-clock ${isTimerCritical ? 'is-critical' : ''} inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-bold shadow-lg`}>
-                <span className="flex items-center gap-1.5 text-slate-200"><Timer size={16} /> {currentActionName}行动中</span>
+              <div
+                className={`poker-table-clock ${isTimerCritical ? 'is-critical' : ''} inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-bold shadow-lg`}
+                aria-label={`turn timer ${timeLeft}s`}
+              >
+                <Timer size={16} />
                 <span className="poker-table-clock-time font-mono text-amber-300">{timeLeft}s</span>
               </div>
             )}

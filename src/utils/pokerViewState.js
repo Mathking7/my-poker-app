@@ -20,9 +20,11 @@ export const getActionViewState = ({
   activeTransition,
   callAmount,
   canTakeAction,
+  currentActionNeedsInput = true,
   currentActionPlayer,
   currentPhaseInfo,
   effectiveSettings,
+  isActionSubmitting = false,
   myPlayerInfo,
   roomData,
   timeLeft,
@@ -32,6 +34,7 @@ export const getActionViewState = ({
     isGameInProgress(roomData?.status) &&
     !roomData?.isPaused &&
     !activeTransition &&
+    currentActionNeedsInput &&
     currentActionPlayer &&
     effectiveSettings.timeLimit !== '无限' &&
     timeLeft > 0
@@ -49,7 +52,9 @@ export const getActionViewState = ({
     if (myPlayerInfo.waitingNextHand) return '下局入座';
     if (myPlayerInfo.folded) return '你已弃牌';
     if (myPlayerInfo.allIn) return '你已全下';
+    if (isActionSubmitting) return '行动提交中';
     if (canTakeAction) return '轮到你行动';
+    if (!currentActionNeedsInput && isGameInProgress(roomData?.status)) return '行动处理中';
     return `等待 ${currentActionPlayer?.name || '其他玩家'}`;
   })();
 
@@ -61,6 +66,7 @@ export const getActionViewState = ({
       if (roomData?.status === 'waiting') return '等待';
       if (roomData?.status === 'showdown') return '结算';
       if (myPlayerInfo?.folded || myPlayerInfo?.allIn) return '本手结束';
+      if (isActionSubmitting) return '同步中';
       return '等待中';
     }
     if (callAmount > 0 && isGameInProgress(roomData?.status)) return `需跟注 ${callAmount}`;

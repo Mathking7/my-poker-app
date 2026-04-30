@@ -35,6 +35,7 @@ export const getPlayerLastSeenAt = (room, player) => {
 
 export const isPlayerActive = (player, now = Date.now(), activeUid = null, room = null) => {
   if (!player) return false;
+  if (player.isAi) return false;
   if (activeUid && player.uid === activeUid) return true;
   const lastSeenAt = getPlayerLastSeenAt(room, player);
   return lastSeenAt > 0 && now - lastSeenAt <= PLAYER_STALE_MS;
@@ -49,7 +50,7 @@ export const getActivePlayerCount = (room, now = Date.now(), activeUid = null) =
 };
 
 export const hasPresenceData = (room) => {
-  return (room?.players || []).some((player) => getPlayerLastSeenAt(room, player) > 0);
+  return (room?.players || []).some((player) => !player.isAi && getPlayerLastSeenAt(room, player) > 0);
 };
 
 export const shouldMarkLegacyRoom = (room) => {
@@ -104,6 +105,8 @@ export const applyRoomMaintenance = (room, now = Date.now(), activeUid = null) =
   const statusInProgress = isGameInProgress(room.status);
 
   const nextPlayers = players.map((player) => {
+    if (player.isAi) return player;
+
     if (player.uid === activeUid) {
       if (!isPlayerActive(player, now, activeUid) || player.isOnline !== true) {
         changed = true;
@@ -142,7 +145,7 @@ export const applyRoomMaintenance = (room, now = Date.now(), activeUid = null) =
 
   let nextRoom = changed ? { ...room, players: nextPlayers, updatedAt: now } : room;
 
-  if (!toMillis(room.presenceMigrationStartedAt) && nextPlayers.some((player) => getPlayerLastSeenAt(room, player) === 0)) {
+  if (!toMillis(room.presenceMigrationStartedAt) && nextPlayers.some((player) => !player.isAi && getPlayerLastSeenAt(room, player) === 0)) {
     nextRoom = {
       ...nextRoom,
       presenceMigrationStartedAt: now,
