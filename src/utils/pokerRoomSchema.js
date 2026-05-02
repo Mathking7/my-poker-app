@@ -1,4 +1,5 @@
 import { normalizeGameSettings } from './gameSettings.js';
+import { normalizeRoomRetentionPolicy } from './roomLifecycle.js';
 
 export const POKER_STATUSES = new Set(['waiting', 'pre-flop', 'flop', 'turn', 'river', 'showdown']);
 
@@ -42,10 +43,17 @@ export const normalizePokerRoom = (room = {}, { roomId = room.id } = {}) => {
   return {
     ...room,
     id: String(room.id || roomId || ''),
+    roomInstanceId: String(room.roomInstanceId || room.id || roomId || ''),
     hostUid: room.hostUid ?? null,
     creatorUid: room.creatorUid || room.hostUid || '',
     createdAt: toFiniteNumber(room.createdAt, Date.now()),
     updatedAt: toFiniteNumber(room.updatedAt, room.createdAt || Date.now()),
+    lastHumanActiveAt: room.lastHumanActiveAt ?? room.updatedAt ?? room.createdAt ?? null,
+    emptySince: room.emptySince ?? null,
+    archiveAt: room.archiveAt ?? null,
+    ttlAt: room.ttlAt ?? null,
+    lifecycleStatus: room.lifecycleStatus || 'active',
+    retentionPolicy: normalizeRoomRetentionPolicy(room.retentionPolicy || room.settings?.roomRetention, room.isPublic),
     status,
     isPublic: normalizeBoolean(room.isPublic),
     isPaused: normalizeBoolean(room.isPaused),
@@ -58,6 +66,11 @@ export const normalizePokerRoom = (room = {}, { roomId = room.id } = {}) => {
     communityCards: Array.isArray(room.communityCards) ? room.communityCards : [],
     deck: Array.isArray(room.deck) ? room.deck : [],
     logs: Array.isArray(room.logs) ? room.logs : [],
+    handActions: Array.isArray(room.handActions) ? room.handActions : [],
+    handHistory: Array.isArray(room.handHistory) ? room.handHistory : [],
+    handStartedAt: room.handStartedAt ?? null,
+    handSeats: Array.isArray(room.handSeats) ? room.handSeats : [],
+    lastHandSummary: room.lastHandSummary || null,
     settings: normalizeGameSettings(room.settings),
     joinRequests: Array.isArray(room.joinRequests) ? room.joinRequests : [],
     players,
@@ -66,5 +79,7 @@ export const normalizePokerRoom = (room = {}, { roomId = room.id } = {}) => {
     allInRunout: normalizeBoolean(room.allInRunout),
     lastAggressorUid: room.lastAggressorUid ?? null,
     handAggressorUid: room.handAggressorUid ?? null,
+    aiTurnLease: room.aiTurnLease || null,
+    aiDiagnostics: room.aiDiagnostics || null,
   };
 };

@@ -56,7 +56,7 @@ export default function PokerHeader({
             onClick={onAddAiPlayer}
             disabled={!canAddAi}
             title={canAddAi ? '加入 AI 玩家' : '房间人数已满'}
-            className="poker-header-button text-slate-300 hover:text-emerald-300 disabled:text-slate-600 disabled:cursor-not-allowed flex items-center gap-1 text-sm"
+            className="poker-header-button flex h-9 items-center gap-1 rounded-lg border border-slate-600 bg-slate-700/70 px-3 text-sm text-slate-200 transition hover:border-emerald-500 hover:text-emerald-300 disabled:border-slate-800 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed"
           >
             <Bot size={16} />
             <span className="poker-header-action-text">加入AI</span>
@@ -66,17 +66,17 @@ export default function PokerHeader({
           <button
             onClick={onTogglePause}
             title={roomData.isPaused ? '恢复对局' : '暂停对局'}
-            className={`poker-header-button flex items-center gap-1 text-sm px-3 py-1 rounded ${roomData.isPaused ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            className={`poker-header-button flex h-9 items-center gap-1 rounded-lg px-3 text-sm transition ${roomData.isPaused ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
           >
             {roomData.isPaused ? <PlayCircle size={16} /> : <Pause size={16} />}
             <span className="poker-header-action-text">{roomData.isPaused ? '恢复对局' : '暂停对局'}</span>
           </button>
         )}
-        <button onClick={onOpenSettings} title="房间设置" className="poker-header-button text-slate-400 hover:text-white flex items-center gap-1 text-sm">
+        <button onClick={onOpenSettings} title="房间设置" className="poker-header-button flex h-9 items-center gap-1 rounded-lg border border-transparent px-3 text-sm text-slate-400 transition hover:border-slate-600 hover:bg-slate-700/70 hover:text-white">
           <Settings size={16} />
           <span className="poker-header-action-text">房间设置</span>
         </button>
-        <button onClick={onLeave} title="退出" className="poker-header-button text-slate-400 hover:text-white flex items-center gap-1 text-sm">
+        <button onClick={onLeave} title="退出" className="poker-header-button flex h-9 items-center gap-1 rounded-lg border border-transparent px-3 text-sm text-slate-400 transition hover:border-slate-600 hover:bg-slate-700/70 hover:text-white">
           <LogOut size={16} />
           <span className="poker-header-action-text">退出</span>
         </button>

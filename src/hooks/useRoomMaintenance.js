@@ -1,7 +1,11 @@
 import { useEffect } from 'react';
 
 import { setRoomDocument } from '../services/roomRepository';
-import { isTransitionActive } from '../utils/gameFlow';
+import {
+  TRANSITION_TIMING,
+  isTransitionActive,
+  shouldAutoAdvanceAfterTransition,
+} from '../utils/gameFlow';
 import {
   applyRoomMaintenance,
   getMaintenanceManagerUid,
@@ -25,6 +29,28 @@ export const useRoomMaintenance = ({
       if (isTransitionActive(currentRoom.transition, now)) return;
       const managerUid = getMaintenanceManagerUid(currentRoom, now, userUid);
       if (managerUid !== userUid) return;
+
+      if (currentRoom.transition?.id && !currentRoom.transition.pausedAt) {
+        const transitionEndsAt = Number(currentRoom.transition.endsAt || 0);
+        const transitionIsStale = transitionEndsAt <= 0 ||
+          now >= transitionEndsAt + TRANSITION_TIMING.transitionCompletionGraceMs;
+        if (transitionIsStale) {
+          try {
+            if (shouldAutoAdvanceAfterTransition(currentRoom)) {
+              await advanceGameState(currentRoom);
+            } else {
+              await setRoomDocument(roomId, {
+                ...currentRoom,
+                transition: null,
+                updatedAt: now,
+              });
+            }
+          } catch (err) {
+            console.error('Transition Maintenance Error:', err);
+          }
+          return;
+        }
+      }
 
       const result = applyRoomMaintenance(currentRoom, now, userUid);
       if (!result.changed) return;

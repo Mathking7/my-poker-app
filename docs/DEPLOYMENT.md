@@ -22,6 +22,15 @@ npm run smoke:transition
 npm run smoke:multiway-layout
 ```
 
+Before a production push that touches room lifecycle, personal history, or AI scheduling, also run:
+
+```powershell
+npm run smoke:ai-single-action
+npm run smoke:personal-history
+npm run smoke:room-personal-history
+npm run smoke:room-create-isolation
+```
+
 ## GitHub
 
 ```powershell
@@ -59,3 +68,13 @@ After pushing to the connected GitHub branch, Vercel should deploy automatically
 ```powershell
 vercel --prod
 ```
+
+## Firebase Rules
+
+Vercel only deploys the static app. Firestore rules must be deployed separately when `firestore.rules` changes:
+
+```powershell
+firebase deploy --only firestore:rules
+```
+
+Current rules keep `users/{uid}/roomHistory` private to the same anonymous auth uid. Room documents are still collaboratively writable by signed-in users because the current app has no server-side arbiter. Strict anti-cheat, server-side dealing, or fully private per-player hands should be handled in a later backend-backed version.

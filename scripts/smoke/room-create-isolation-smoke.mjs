@@ -20,14 +20,83 @@ async function createRoomFromCurrentLobby(page) {
   return getRoomIdFromHeader(page);
 }
 
+async function injectIsolationMarker(page, roomId) {
+  return page.evaluate(async ({ roomId }) => {
+    const {
+      getRoomSnapshot,
+      setRoomDocument,
+    } = await import('/src/services/roomRepository.js');
+
+    const snapshot = await getRoomSnapshot(roomId);
+    if (!snapshot.exists()) throw new Error(`room ${roomId} was not created`);
+    const room = snapshot.data();
+    const now = Date.now();
+    const markerUid = `smoke-marker-${now}`;
+    const markerPlayer = {
+      uid: markerUid,
+      name: 'IsoMarker',
+      chips: 970,
+      hand: [],
+      bet: 30,
+      folded: false,
+      allIn: false,
+      hasActed: true,
+      isSittingOut: false,
+      waitingNextHand: false,
+      lastAction: 'call',
+      isAi: true,
+      aiStyle: 'balanced',
+      lastSeenAt: now,
+      disconnectedAt: null,
+      isOnline: true,
+      totalContribution: 30,
+    };
+
+    await setRoomDocument(roomId, {
+      ...room,
+      players: [
+        ...(Array.isArray(room.players) ? room.players : []),
+        markerPlayer,
+      ],
+      pot: Number(room.pot || 0) + 30,
+      logs: [
+        ...(Array.isArray(room.logs) ? room.logs : []),
+        `smoke isolation marker ${markerUid}`,
+      ],
+      isolationSmokeMarker: markerUid,
+      updatedAt: now,
+    }, { merge: false });
+
+    return markerUid;
+  }, { roomId });
+}
+
+async function readRoomIsolationState(page, roomId, markerUid) {
+  return page.evaluate(async ({ roomId, markerUid }) => {
+    const { getRoomSnapshot } = await import('/src/services/roomRepository.js');
+    const snapshot = await getRoomSnapshot(roomId);
+    const room = snapshot.exists() ? snapshot.data() : null;
+    const players = Array.isArray(room?.players) ? room.players : [];
+    return {
+      exists: Boolean(room),
+      playerCount: players.length,
+      hasMarker: room?.isolationSmokeMarker === markerUid ||
+        players.some((player) => player.uid === markerUid || player.name === 'IsoMarker') ||
+        (Array.isArray(room?.logs) && room.logs.some((entry) => String(entry).includes(markerUid))),
+    };
+  }, { roomId, markerUid });
+}
+
 const browser = await launchSmokeBrowser();
 let context;
 let result = {
   ok: false,
   firstRoomId: null,
   secondRoomId: null,
+  markerUid: null,
   firstOpponentCount: 0,
   secondOpponentCount: 0,
+  secondRoomState: null,
 };
 
 try {
@@ -37,11 +106,8 @@ try {
   result.firstRoomId = await createRoom(page, `Iso${Date.now() % 10000}`, { isPublic: false });
   await page.waitForSelector('.poker-room-chip', { timeout: 30_000 });
 
-  const addAiButton = page.locator('.poker-header-actions button').first();
-  if (await addAiButton.isVisible().catch(() => false)) {
-    await addAiButton.click().catch(() => {});
-    await sleep(900);
-  }
+  result.markerUid = await injectIsolationMarker(page, result.firstRoomId);
+  await sleep(1200);
 
   result.firstOpponentCount = await page.evaluate(() => document.querySelectorAll('.poker-opponent-card').length);
   await page.locator('.poker-header-actions button').last().click();
@@ -51,6 +117,7 @@ try {
   await sleep(1200);
   result.secondOpponentCount = await page.evaluate(() => document.querySelectorAll('.poker-opponent-card').length);
   const displayedRoomId = await getRoomIdFromHeader(page);
+  result.secondRoomState = await readRoomIsolationState(page, result.secondRoomId, result.markerUid);
 
   result = {
     ...result,
@@ -58,9 +125,13 @@ try {
     ok: Boolean(
       result.firstRoomId &&
       result.secondRoomId &&
+      result.markerUid &&
       result.secondRoomId !== result.firstRoomId &&
       displayedRoomId === result.secondRoomId &&
       result.firstOpponentCount >= 1 &&
+      result.secondRoomState?.exists &&
+      result.secondRoomState.playerCount === 1 &&
+      !result.secondRoomState.hasMarker &&
       result.secondOpponentCount === 0
     ),
   };

@@ -17,6 +17,11 @@ export const useRoomPresence = ({ roomId, userUid }) => {
               isOnline: true,
             },
           },
+          lastHumanActiveAt: now,
+          emptySince: null,
+          archiveAt: null,
+          ttlAt: null,
+          lifecycleStatus: 'active',
           updatedAt: now,
         }, { merge: true });
       } catch (err) {

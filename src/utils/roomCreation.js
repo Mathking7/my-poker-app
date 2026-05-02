@@ -1,4 +1,5 @@
 import { normalizeGameSettings } from './gameSettings.js';
+import { normalizeRoomRetentionPolicy } from './roomLifecycle.js';
 import { stampPlayerPresence } from './roomMaintenance.js';
 
 export const ROOM_ID_MIN = 1000;
@@ -40,13 +41,21 @@ export const buildInitialRoomData = ({
   now = Date.now(),
 }) => {
   const normalizedSettings = normalizeGameSettings(settings);
+  const retentionPolicy = normalizeRoomRetentionPolicy(normalizedSettings.roomRetention, isPublic);
 
   return {
     id: roomId,
+    roomInstanceId: `${roomId}-${now}-${Math.random().toString(36).slice(2, 8)}`,
     hostUid: isPublic ? null : user.uid,
     creatorUid: user.uid,
     createdAt: now,
     updatedAt: now,
+    lastHumanActiveAt: now,
+    emptySince: null,
+    archiveAt: null,
+    ttlAt: null,
+    lifecycleStatus: 'active',
+    retentionPolicy,
     presenceMigrationStartedAt: null,
     status: 'waiting',
     isPaused: false,
@@ -59,6 +68,13 @@ export const buildInitialRoomData = ({
     communityCards: [],
     deck: [],
     logs: [`房间创建成功 (房号: ${roomId})`],
+    handActions: [],
+    handHistory: [],
+    handStartedAt: null,
+    handSeats: [],
+    lastHandSummary: null,
+    aiTurnLease: null,
+    aiDiagnostics: null,
     gameType,
     isPublic,
     settings: normalizedSettings,

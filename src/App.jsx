@@ -16,13 +16,26 @@ import { MAX_PLAYERS, isJoinableStatus, normalizeGameSettings } from './utils/ga
 import { buildInitialRoomData, createRoomIdCandidate } from './utils/roomCreation';
 import { normalizePokerRoom } from './utils/pokerRoomSchema';
 import {
-  deleteRoomDocument,
+  applyRoomLifecycle,
+  buildPublicRoomIndex,
+  buildUserRoomHistory,
+  getRoomLifecycleState,
+  hasLifecycleChanged,
+} from './utils/roomLifecycle';
+import {
+  deletePublicRoomIndexDocument,
+  deleteUserRoomHistoryDocument,
+  getPublicRoomIndexSnapshot,
   getRoomSnapshot,
   getRoomsSnapshot,
+  getUserRoomHistorySnapshot,
   mergeRoomDocument,
   runRoomTransaction,
+  setPublicRoomIndexDocument,
+  setUserRoomHistoryDocument,
   subscribeRoom,
 } from './services/roomRepository';
+import { deleteRoomWithIndexes } from './services/roomLifecycleActions';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -30,18 +43,60 @@ export default function App() {
   const [roomData, setRoomData] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
+  const syncPublicRoomIndex = useCallback(async (room, now = Date.now(), activeHumanCount = null) => {
+    if (!room?.id) return;
+    const activeCount = activeHumanCount ?? getActivePlayerCount(room, now);
+    const indexData = buildPublicRoomIndex(room, now, { activeHumanCount: activeCount });
+    if (indexData) {
+      await setPublicRoomIndexDocument(room.id, indexData, { merge: true });
+    } else if (room.isPublic) {
+      await deletePublicRoomIndexDocument(room.id).catch(() => {});
+    }
+  }, []);
+
+  const syncUserRoomHistory = useCallback(async (room, uid, now = Date.now(), activeHumanCount = null) => {
+    if (!room?.id || !uid) return;
+    const activeCount = activeHumanCount ?? getActivePlayerCount(room, now, uid);
+    const historyData = buildUserRoomHistory(room, uid, now, { activeHumanCount: activeCount });
+    if (historyData) {
+      await setUserRoomHistoryDocument(uid, room.id, historyData, { merge: true });
+    }
+  }, []);
+
+  const applyLifecycleMaintenance = useCallback(async (roomRef, room, now = Date.now(), activeHumanCount = null) => {
+    const activeCount = activeHumanCount ?? getActivePlayerCount(room, now);
+    const lifecycleRoom = applyRoomLifecycle(room, now, { activeHumanCount: activeCount });
+    if (!hasLifecycleChanged(room, lifecycleRoom)) return lifecycleRoom;
+    await mergeRoomDocument(roomRef, {
+      retentionPolicy: lifecycleRoom.retentionPolicy,
+      lastHumanActiveAt: lifecycleRoom.lastHumanActiveAt ?? null,
+      emptySince: lifecycleRoom.emptySince ?? null,
+      archiveAt: lifecycleRoom.archiveAt ?? null,
+      ttlAt: lifecycleRoom.ttlAt ?? null,
+      lifecycleStatus: lifecycleRoom.lifecycleStatus,
+      updatedAt: now,
+    });
+    return lifecycleRoom;
+  }, []);
+
   const sweepExpiredRooms = useCallback(async () => {
     const now = Date.now();
     const snapshot = await getRoomsSnapshot();
     for (const roomDoc of snapshot.docs) {
-      const data = roomDoc.data();
-      if (isRoomExpired(data, now)) {
-        await deleteRoomDocument(roomDoc.ref);
+      const data = normalizePokerRoom(roomDoc.data(), { roomId: roomDoc.id });
+      const activeHumanCount = getActivePlayerCount(data, now);
+      const lifecycleRoom = applyRoomLifecycle(data, now, { activeHumanCount });
+      const lifecycle = getRoomLifecycleState(lifecycleRoom, now, { activeHumanCount });
+      if (isRoomExpired(lifecycleRoom, now) || lifecycle.isExpired) {
+        await deleteRoomWithIndexes(roomDoc.ref, roomDoc.id);
       } else if (shouldMarkLegacyRoom(data)) {
         await mergeRoomDocument(roomDoc.ref, { presenceMigrationStartedAt: now, updatedAt: now });
+      } else if (hasLifecycleChanged(data, lifecycleRoom)) {
+        await applyLifecycleMaintenance(roomDoc.ref, data, now, activeHumanCount);
       }
+      await syncPublicRoomIndex(lifecycleRoom, now, activeHumanCount).catch(() => {});
     }
-  }, []);
+  }, [applyLifecycleMaintenance, syncPublicRoomIndex]);
 
   useEffect(() => {
     if (!isFirebaseInitialized) return;
@@ -89,29 +144,127 @@ export default function App() {
     };
   }, [user, activeRoomId]);
 
-  // 获取公开房间列表并清理僵尸房。私密房也在这里一起清理，只是不展示。
+  // 公开大厅只读取公开索引；私密房间必须知道房号或出现在自己的历史记录里。
   const handleFetchPublicRooms = async (gameType = 'texas') => {
     try {
       const now = Date.now();
-      const snapshot = await getRoomsSnapshot();
+      let snapshot = await getPublicRoomIndexSnapshot();
+      if (snapshot.empty) {
+        await sweepExpiredRooms();
+        snapshot = await getPublicRoomIndexSnapshot();
+      }
       const rooms = [];
-      for (const d of snapshot.docs) {
-        const data = normalizePokerRoom(d.data(), { roomId: d.id });
+      for (const indexDoc of snapshot.docs) {
+        const indexData = indexDoc.data();
+        if (indexData.gameType && indexData.gameType !== gameType) continue;
+        const roomId = indexData.roomId || indexData.id || indexDoc.id;
+        const roomSnap = await getRoomSnapshot(roomId);
+        if (!roomSnap.exists()) {
+          await deletePublicRoomIndexDocument(roomId).catch(() => {});
+          continue;
+        }
+        const data = normalizePokerRoom(roomSnap.data(), { roomId });
+        const activeHumanCount = getActivePlayerCount(data, now);
         if (isRoomExpired(data, now)) {
-          await deleteRoomDocument(d.ref);
+          await deleteRoomWithIndexes(roomId, roomId);
           continue;
         }
-        if (shouldMarkLegacyRoom(data)) {
-          await mergeRoomDocument(d.ref, { presenceMigrationStartedAt: now, updatedAt: now });
-          continue;
-        }
-        if (data.isPublic && data.gameType === gameType && getActivePlayerCount(data, now) > 0) {
-          rooms.push({ ...data, activePlayerCount: getActivePlayerCount(data, now) });
+        const lifecycleRoom = await applyLifecycleMaintenance(roomId, data, now, activeHumanCount);
+        const publicIndex = buildPublicRoomIndex(lifecycleRoom, now, { activeHumanCount });
+        if (publicIndex && publicIndex.gameType === gameType) {
+          await setPublicRoomIndexDocument(roomId, publicIndex, { merge: true });
+          rooms.push(publicIndex);
+        } else {
+          await deletePublicRoomIndexDocument(roomId).catch(() => {});
         }
       }
-      return rooms;
+      return rooms.sort((a, b) => (b.lastHumanActiveAt || b.updatedAt || 0) - (a.lastHumanActiveAt || a.updatedAt || 0));
     } catch (err) {
       console.error(err);
+      return [];
+    }
+  };
+
+  const handleFetchRoomHistory = async () => {
+    if (!user?.uid) return [];
+    try {
+      const now = Date.now();
+      const snapshot = await getUserRoomHistorySnapshot(user.uid);
+      const history = [];
+      for (const historyDoc of snapshot.docs) {
+        const saved = historyDoc.data();
+        const hasSavedHands = Boolean(saved.lastHandSummary || saved.recentHands?.length);
+        if (saved.historyTtlAt && saved.historyTtlAt < now) {
+          await deleteUserRoomHistoryDocument(user.uid, historyDoc.id).catch(() => {});
+          continue;
+        }
+        const roomId = saved.roomId || saved.id || historyDoc.id;
+        const roomSnap = await getRoomSnapshot(roomId);
+        if (!roomSnap.exists()) {
+          if (!hasSavedHands) {
+            await deleteUserRoomHistoryDocument(user.uid, roomId).catch(() => {});
+            continue;
+          }
+          const deletedHistory = {
+            ...saved,
+            roomId,
+            id: roomId,
+            canRejoin: false,
+            lifecycleStatus: saved.lifecycleStatus === 'deleted' ? 'deleted' : 'expired',
+            roomDeletedAt: saved.roomDeletedAt || now,
+          };
+          await setUserRoomHistoryDocument(user.uid, roomId, deletedHistory, { merge: true }).catch(() => {});
+          history.push(deletedHistory);
+          continue;
+        }
+        const room = normalizePokerRoom(roomSnap.data(), { roomId });
+        const isReusedRoomId = Boolean(
+          saved.roomInstanceId &&
+          room.roomInstanceId &&
+          saved.roomInstanceId !== room.roomInstanceId
+        );
+        if (isReusedRoomId) {
+          if (!hasSavedHands) {
+            await deleteUserRoomHistoryDocument(user.uid, roomId).catch(() => {});
+            continue;
+          }
+          const endedHistory = {
+            ...saved,
+            roomId,
+            id: roomId,
+            canRejoin: false,
+            lifecycleStatus: 'ended',
+            roomReused: true,
+          };
+          await setUserRoomHistoryDocument(user.uid, roomId, endedHistory, { merge: true }).catch(() => {});
+          history.push(endedHistory);
+          continue;
+        }
+        const activeHumanCount = getActivePlayerCount(room, now);
+        if (isRoomExpired(room, now)) {
+          await deleteRoomWithIndexes(roomId, roomId);
+          if (!hasSavedHands) {
+            await deleteUserRoomHistoryDocument(user.uid, roomId).catch(() => {});
+            continue;
+          }
+          const expiredHistory = { ...saved, roomId, id: roomId, canRejoin: false, lifecycleStatus: 'expired' };
+          await setUserRoomHistoryDocument(user.uid, roomId, expiredHistory, { merge: true }).catch(() => {});
+          history.push(expiredHistory);
+          continue;
+        }
+        const lifecycleRoom = await applyLifecycleMaintenance(roomId, room, now, activeHumanCount);
+        const nextHistory = buildUserRoomHistory(lifecycleRoom, user.uid, saved.lastVisitedAt || now, {
+          activeHumanCount,
+          existingRecentHands: saved.recentHands,
+        });
+        history.push(nextHistory || { ...saved, roomId, id: roomId });
+      }
+      return history
+        .filter(Boolean)
+        .sort((a, b) => (b.lastVisitedAt || b.updatedAt || 0) - (a.lastVisitedAt || a.updatedAt || 0))
+        .slice(0, 20);
+    } catch (err) {
+      console.error('Room History Error:', err);
       return [];
     }
   };
@@ -151,6 +304,10 @@ export default function App() {
       setErrorMsg('');
       setRoomData(createdRoom.data);
       setActiveRoomId(createdRoom.id);
+      await Promise.allSettled([
+        syncPublicRoomIndex(createdRoom.data, Date.now(), 1),
+        syncUserRoomHistory(createdRoom.data, user.uid, Date.now(), 1),
+      ]);
       return true;
     } catch (err) {
       console.error("Create Room Error:", err);
@@ -175,7 +332,7 @@ export default function App() {
         const players = data.players || [];
         const existingPlayer = players.find(p => p.uid === user.uid);
         if (isRoomExpired(data, now)) {
-          await deleteRoomDocument(normalizedRoomId);
+          await deleteRoomWithIndexes(normalizedRoomId, normalizedRoomId);
           setErrorMsg('房间已过期并被清理');
           return false;
         }
@@ -200,7 +357,26 @@ export default function App() {
            const newRequests = existingRequests.some(req => req.uid === user.uid)
              ? existingRequests.map(req => req.uid === user.uid ? { ...req, ...nextRequest } : req)
              : [...existingRequests, nextRequest];
-           await mergeRoomDocument(normalizedRoomId, { joinRequests: newRequests, updatedAt: now });
+           const requestedRoom = {
+             ...data,
+             joinRequests: newRequests,
+             lastHumanActiveAt: now,
+             emptySince: null,
+             archiveAt: null,
+             ttlAt: null,
+             lifecycleStatus: 'active',
+             updatedAt: now,
+           };
+           await mergeRoomDocument(normalizedRoomId, {
+             joinRequests: newRequests,
+             lastHumanActiveAt: now,
+             emptySince: null,
+             archiveAt: null,
+             ttlAt: null,
+             lifecycleStatus: 'active',
+             updatedAt: now,
+           });
+           await syncUserRoomHistory(requestedRoom, user.uid, now, getActivePlayerCount(requestedRoom, now, user.uid));
            setErrorMsg('');
            setRoomData(null);
            setActiveRoomId(normalizedRoomId);
@@ -219,7 +395,31 @@ export default function App() {
               waitingNextHand: isMidHand,
             }, now);
           });
-          await mergeRoomDocument(normalizedRoomId, { players: newPlayers, updatedAt: now });
+          const nextRoom = {
+            ...data,
+            hostUid: !data.isPublic && !data.hostUid ? user.uid : data.hostUid,
+            players: newPlayers,
+            lastHumanActiveAt: now,
+            emptySince: null,
+            archiveAt: null,
+            ttlAt: null,
+            lifecycleStatus: 'active',
+            updatedAt: now,
+          };
+          await mergeRoomDocument(normalizedRoomId, {
+            hostUid: !data.isPublic && !data.hostUid ? user.uid : data.hostUid,
+            players: newPlayers,
+            lastHumanActiveAt: now,
+            emptySince: null,
+            archiveAt: null,
+            ttlAt: null,
+            lifecycleStatus: 'active',
+            updatedAt: now,
+          });
+          await Promise.allSettled([
+            syncPublicRoomIndex(nextRoom, now, getActivePlayerCount(nextRoom, now, user.uid)),
+            syncUserRoomHistory(nextRoom, user.uid, now, getActivePlayerCount(nextRoom, now, user.uid)),
+          ]);
         } else {
           const isMidHand = !isJoinableStatus(data.status);
           const newPlayers = [...players, { 
@@ -227,7 +427,35 @@ export default function App() {
             hand: [], bet: 0, folded: isMidHand, allIn: false, hasActed: isMidHand, isSittingOut: false, waitingNextHand: isMidHand,
             lastSeenAt: now, disconnectedAt: null, isOnline: true
           }];
-          await mergeRoomDocument(normalizedRoomId, { players: newPlayers, settings: roomSettings, logs: [...(data.logs || []), `${playerName} ${isMidHand ? '加入观战，将在下一局入座。' : '加入了房间。'}`], updatedAt: now });
+          const nextRoom = {
+            ...data,
+            hostUid: !data.isPublic && !data.hostUid ? user.uid : data.hostUid,
+            players: newPlayers,
+            settings: roomSettings,
+            logs: [...(data.logs || []), `${playerName} ${isMidHand ? '加入观战，将在下一局入座。' : '加入了房间。'}`],
+            lastHumanActiveAt: now,
+            emptySince: null,
+            archiveAt: null,
+            ttlAt: null,
+            lifecycleStatus: 'active',
+            updatedAt: now,
+          };
+          await mergeRoomDocument(normalizedRoomId, {
+            hostUid: !data.isPublic && !data.hostUid ? user.uid : data.hostUid,
+            players: newPlayers,
+            settings: roomSettings,
+            logs: nextRoom.logs,
+            lastHumanActiveAt: now,
+            emptySince: null,
+            archiveAt: null,
+            ttlAt: null,
+            lifecycleStatus: 'active',
+            updatedAt: now,
+          });
+          await Promise.allSettled([
+            syncPublicRoomIndex(nextRoom, now, getActivePlayerCount(nextRoom, now, user.uid)),
+            syncUserRoomHistory(nextRoom, user.uid, now, getActivePlayerCount(nextRoom, now, user.uid)),
+          ]);
         }
         setErrorMsg('');
         setRoomData(null);
@@ -252,7 +480,16 @@ export default function App() {
   };
 
   if (!activeRoomId || !activeRoomData) {
-    return <Lobby onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} onFetchPublicRooms={handleFetchPublicRooms} errorMsg={errorMsg} />;
+    return (
+      <Lobby
+        user={user}
+        onCreateRoom={handleCreateRoom}
+        onJoinRoom={handleJoinRoom}
+        onFetchPublicRooms={handleFetchPublicRooms}
+        onFetchRoomHistory={handleFetchRoomHistory}
+        errorMsg={errorMsg}
+      />
+    );
   }
   return <PokerGame user={user} roomId={activeRoomId} roomData={activeRoomData} onLeaveRoom={handleLeaveRoom} />;
 }

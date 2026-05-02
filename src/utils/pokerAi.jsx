@@ -820,14 +820,18 @@ export const decidePokerAiActionAsync = (room, aiPlayer, config = {}) => {
 
     worker.addEventListener('message', handleMessage);
     worker.addEventListener('error', handleError);
-    worker.postMessage({
-      id,
-      room: snapshot,
-      aiPlayer: snapshot.players.find((player) => player.uid === aiPlayer?.uid) || aiPlayer,
-      config: {
-        highQuality: true,
-        iterations: workerIterations,
-      },
-    });
+    try {
+      worker.postMessage({
+        id,
+        room: snapshot,
+        aiPlayer: snapshot.players.find((player) => player.uid === aiPlayer?.uid) || aiPlayer,
+        config: {
+          highQuality: true,
+          iterations: workerIterations,
+        },
+      });
+    } catch {
+      finish(fallback());
+    }
   });
 };

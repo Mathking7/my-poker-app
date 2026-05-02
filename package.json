@@ -1,7 +1,7 @@
 {
   "name": "my-poker-app",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,7 +16,9 @@
     "smoke:multiway-layout": "node scripts/smoke/multiway-layout-smoke.mjs",
     "smoke:mobile-opponents": "node scripts/smoke/mobile-opponents-smoke.mjs",
     "smoke:pause-transition": "node scripts/smoke/pause-transition-smoke.mjs",
+    "smoke:personal-history": "node scripts/smoke/personal-history-smoke.mjs",
     "smoke:raise-slider": "node scripts/smoke/raise-slider-smoke.mjs",
+    "smoke:room-personal-history": "node scripts/smoke/room-personal-history-smoke.mjs",
     "smoke:room-create-isolation": "node scripts/smoke/room-create-isolation-smoke.mjs",
     "smoke:transition": "node scripts/smoke/transition-layout-smoke.mjs",
     "preview": "vite preview"

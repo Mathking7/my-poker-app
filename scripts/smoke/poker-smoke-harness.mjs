@@ -62,6 +62,7 @@ export async function createRoom(page, playerName = `Host${Date.now() % 10000}`,
   await page.waitForSelector('[data-testid="confirm-create-room"]', { timeout: 10_000 });
   await page.locator('[data-testid="confirm-create-room"]').click();
   await page.waitForSelector('.poker-room-chip', { timeout: 30_000 });
+  await page.waitForFunction(() => !document.querySelector('.fixed.inset-0'), null, { timeout: 10_000 }).catch(() => {});
   return (await page.locator('.poker-room-chip .tracking-widest').first().textContent()).trim();
 }
 

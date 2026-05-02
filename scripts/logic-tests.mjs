@@ -11,6 +11,18 @@ import {
   normalizeGameSettings,
 } from '../src/utils/gameSettings.js';
 import {
+  DEFAULT_PRIVATE_ROOM_RETENTION,
+  PUBLIC_ROOM_RETENTION_POLICY,
+  ROOM_HISTORY_SCHEMA_VERSION,
+  applyRoomLifecycle,
+  buildPublicRoomIndex,
+  buildUserRoomHistory,
+  mergePersonalRecentHands,
+  getRoomLifecycleState,
+  normalizeRoomRetentionPolicy,
+  sanitizeRecentHands,
+} from '../src/utils/roomLifecycle.js';
+import {
   CHIP_UNIT,
   quantizeChipAmount,
 } from '../src/utils/chipMath.js';
@@ -84,7 +96,11 @@ import {
   getAiSimulationIterations,
 } from '../src/utils/pokerAiConfig.js';
 import {
+  AI_TURN_LEASE_MS,
+  buildAiTurnLease,
   getAiActionKey,
+  getSafeAiRecoveryDecision,
+  isAiTurnLeaseActive,
 } from '../src/utils/pokerAiTurn.js';
 
 const jsxDataUrl = (path) => {
@@ -94,6 +110,12 @@ const jsxDataUrl = (path) => {
 
 const pokerLogicUrl = jsxDataUrl(new URL('../src/utils/pokerLogic.jsx', import.meta.url));
 const { createDeck, evaluate7Cards } = await import(pokerLogicUrl);
+
+const firestoreRules = fs.readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
+assert.match(firestoreRules, /users\/\{userId\}/);
+assert.match(firestoreRules, /request\.auth\.uid == userId/);
+assert.match(firestoreRules, /public\/data\/rooms\/\{roomId\}/);
+assert.match(firestoreRules, /public\/data\/publicRoomIndex\/\{roomId\}/);
 const pokerAiSource = fs.readFileSync(new URL('../src/utils/pokerAi.jsx', import.meta.url), 'utf8')
   .replace("import { CHIP_UNIT, quantizeChipAmount } from './chipMath';", `import { CHIP_UNIT, quantizeChipAmount } from '${new URL('../src/utils/chipMath.js', import.meta.url).href}';`)
   .replace("import { clampRaiseAmount, getPlayerBettingOptions } from './gameFlow';", `import { clampRaiseAmount, getPlayerBettingOptions } from '${new URL('../src/utils/gameFlow.js', import.meta.url).href}';`)
@@ -147,7 +169,11 @@ assert.deepEqual(normalizeGameSettings({ initialChips: -1, timeLimit: 1, allowJo
   allowJoinDuringGame: true,
   doubleBlinds: false,
   autoTopUp: false,
+  roomRetention: DEFAULT_PRIVATE_ROOM_RETENTION,
 });
+assert.equal(normalizeRoomRetentionPolicy('7d', false), '7d');
+assert.equal(normalizeRoomRetentionPolicy('bad', false), DEFAULT_PRIVATE_ROOM_RETENTION);
+assert.equal(normalizeRoomRetentionPolicy('30d', true), PUBLIC_ROOM_RETENTION_POLICY);
 assert.equal(normalizeGameSettings({ initialChips: 999999 }).initialChips, MAX_INITIAL_CHIPS);
 assert.equal(normalizeGameSettings({ initialChips: 555 }).initialChips, 560);
 assert.equal(normalizeGameSettings({ timeLimit: 999999 }).timeLimit, MAX_TIME_LIMIT);
@@ -159,7 +185,7 @@ assert.equal(getBigBlindForHand({ doubleBlinds: true }, 5), 20);
 assert.equal(getSmallBlindForHand({ doubleBlinds: true }, 6), 20);
 assert.equal(getBigBlindForHand({ doubleBlinds: true }, 6), 40);
 
-const now = 1_000_000;
+const now = 10_000_000;
 assert.equal(createRoomIdCandidate({ cryptoApi: null, random: () => 0 }), '1000');
 assert.equal(createRoomIdCandidate({ cryptoApi: null, random: () => 0.999999 }), '9999');
 assert.equal(createRoomIdCandidate({
@@ -180,11 +206,14 @@ const initialPublicRoom = buildInitialRoomData({
   now,
 });
 assert.equal(initialPublicRoom.id, '1234');
+assert.ok(initialPublicRoom.roomInstanceId.startsWith('1234-'));
 assert.equal(initialPublicRoom.hostUid, null);
 assert.equal(initialPublicRoom.creatorUid, 'host');
 assert.equal(initialPublicRoom.status, 'waiting');
 assert.equal(initialPublicRoom.settings.initialChips, 560);
 assert.equal(initialPublicRoom.settings.timeLimit, MIN_TIME_LIMIT);
+assert.equal(initialPublicRoom.retentionPolicy, PUBLIC_ROOM_RETENTION_POLICY);
+assert.equal(initialPublicRoom.lastHumanActiveAt, now);
 assert.equal(initialPublicRoom.players.length, 1);
 assert.equal(initialPublicRoom.players[0].uid, 'host');
 assert.equal(initialPublicRoom.players[0].chips, 560);
@@ -195,9 +224,18 @@ assert.equal(buildInitialRoomData({
   playerName: 'Host',
   gameType: 'texas',
   isPublic: false,
-  settings: {},
+  settings: { roomRetention: '7d' },
   now,
 }).hostUid, 'host');
+assert.equal(buildInitialRoomData({
+  roomId: '2345',
+  user: { uid: 'host' },
+  playerName: 'Host',
+  gameType: 'texas',
+  isPublic: false,
+  settings: { roomRetention: '7d' },
+  now,
+}).retentionPolicy, '7d');
 assert.deepEqual(normalizePokerPlayer({ uid: 'p1', chips: 'bad', hand: null, bet: 7 }), {
   uid: 'p1',
   name: 'Player',
@@ -235,8 +273,122 @@ assert.deepEqual(normalizedLegacyRoom.communityCards, []);
 assert.equal(shouldMarkLegacyRoom({ players: [{ uid: 'a' }] }), true);
 assert.equal(isRoomExpired({ players: [{ uid: 'a' }] }, now), false);
 assert.equal(isRoomExpired({ players: [] }, now), true);
+assert.equal(isRoomExpired({ players: [], updatedAt: now, retentionPolicy: '24h' }, now), false);
 assert.equal(isRoomExpired({ presenceMigrationStartedAt: now - EMPTY_ROOM_TTL_MS - 1, players: [{ uid: 'a' }] }, now), true);
 const active = stampPlayerPresence({ uid: 'a', name: 'A' }, now);
+const retainingPrivateRoom = applyRoomLifecycle({
+  id: 'p1',
+  isPublic: false,
+  retentionPolicy: '24h',
+  updatedAt: now - 1000,
+  players: [{ uid: 'a', name: 'A' }],
+}, now, { activeHumanCount: 0 });
+assert.equal(retainingPrivateRoom.lifecycleStatus, 'retaining');
+assert.equal(isRoomExpired(retainingPrivateRoom, now), false);
+assert.equal(isRoomExpired({ ...retainingPrivateRoom, ttlAt: now - 1 }, now), true);
+const activePublicRoom = applyRoomLifecycle({
+  id: 'pub1',
+  isPublic: true,
+  gameType: 'texas',
+  status: 'waiting',
+  updatedAt: now,
+  players: [active],
+}, now, { activeHumanCount: 1 });
+const publicIndex = buildPublicRoomIndex(activePublicRoom, now, { activeHumanCount: 1 });
+assert.equal(publicIndex.roomId, 'pub1');
+assert.equal(publicIndex.activePlayerCount, 1);
+assert.equal(buildPublicRoomIndex(activePublicRoom, now, { activeHumanCount: 0 }), null);
+const historyEntry = buildUserRoomHistory(activePublicRoom, 'a', now, { activeHumanCount: 1 });
+assert.equal(historyEntry.roomId, 'pub1');
+assert.equal(historyEntry.canRejoin, true);
+assert.equal(historyEntry.historySchemaVersion, ROOM_HISTORY_SCHEMA_VERSION);
+assert.equal(getRoomLifecycleState({ ...activePublicRoom, ttlAt: now - 1 }, now, { activeHumanCount: 0 }).isExpired, true);
+const recentHands = sanitizeRecentHands([{
+  id: 'h1',
+  handNumber: 2,
+  board: ['♠A', '♥K'],
+  totalPot: 120,
+  players: [{ uid: 'a', name: 'A', shownCards: ['♣Q', '♦Q'], rankName: '一对' }],
+  actions: [{ id: 'a1', playerName: 'A', actionType: 'call', amount: 20, at: now }],
+  summary: 'A +120',
+}]);
+assert.equal(recentHands.length, 1);
+assert.deepEqual(recentHands[0].players[0].shownCards, ['♣Q', '♦Q']);
+assert.equal(recentHands[0].actions[0].amount, 20);
+const roomWithPrivateHand = {
+  ...activePublicRoom,
+  status: 'showdown',
+  handCount: 3,
+  settlement: { id: 'settled-3' },
+  players: [
+    { uid: 'a', name: 'A', hand: ['As', 'Ah'] },
+    { uid: 'b', name: 'B', hand: ['Ks', 'Kh'] },
+  ],
+  handHistory: [{
+    id: 'h-private',
+    handNumber: 3,
+    endedAt: now,
+    board: ['2c', '7d', 'Jh', '4s', '9c'],
+    totalPot: 80,
+    players: [{ uid: 'a', name: 'A', shownCards: [], rankName: 'pair' }],
+    actions: [],
+    summary: 'A +80',
+  }],
+};
+const privateHistoryEntry = buildUserRoomHistory(roomWithPrivateHand, 'a', now, { activeHumanCount: 1 });
+assert.deepEqual(privateHistoryEntry.recentHands[0].heroCards, ['As', 'Ah']);
+assert.equal(privateHistoryEntry.recentHands[0].players[0].shownCards.length, 0);
+const preservedPrivateHistory = buildUserRoomHistory(
+  {
+    ...roomWithPrivateHand,
+    status: 'pre-flop',
+    handCount: 4,
+    settlement: null,
+    players: roomWithPrivateHand.players.map((player) => ({ ...player, hand: [] })),
+  },
+  'a',
+  now + 1000,
+  { activeHumanCount: 1, existingRecentHands: privateHistoryEntry.recentHands },
+);
+assert.deepEqual(preservedPrivateHistory.recentHands[0].heroCards, ['As', 'Ah']);
+const inRoomPersonalHistory = mergePersonalRecentHands(
+  roomWithPrivateHand.handHistory,
+  preservedPrivateHistory.recentHands,
+);
+assert.deepEqual(inRoomPersonalHistory[0].heroCards, ['As', 'Ah']);
+assert.equal(roomWithPrivateHand.handHistory[0].heroCards, undefined);
+assert.deepEqual(getSafeAiRecoveryDecision({
+  pot: 100,
+  currentBet: 20,
+  minRaise: 20,
+  players: [{ uid: 'ai', bet: 20, chips: 200, isAi: true }],
+}, { uid: 'ai', bet: 20, chips: 200, isAi: true }), { actionType: 'call', amount: 0, reason: 'recovery-check' });
+assert.equal(getSafeAiRecoveryDecision({
+  pot: 100,
+  currentBet: 90,
+  minRaise: 20,
+  players: [{ uid: 'ai', bet: 20, chips: 200, isAi: true }],
+}, { uid: 'ai', bet: 20, chips: 200, isAi: true }).actionType, 'fold');
+const aiLease = buildAiTurnLease({
+  actionKey: 'room:1:ai',
+  sourceToken: { playerUid: 'ai' },
+  claimedBy: 'driver',
+  now,
+});
+assert.equal(aiLease.playerUid, 'ai');
+assert.equal(aiLease.attempt, 1);
+assert.equal(aiLease.expiresAt - aiLease.claimedAt, AI_TURN_LEASE_MS);
+assert.ok(AI_TURN_LEASE_MS >= 12_000);
+assert.equal(isAiTurnLeaseActive(aiLease, 'room:1:ai', now + 1000), true);
+assert.equal(isAiTurnLeaseActive(aiLease, 'room:other', now + 1000), false);
+assert.equal(isAiTurnLeaseActive(aiLease, 'room:1:ai', aiLease.expiresAt + 1), false);
+assert.equal(buildAiTurnLease({
+  actionKey: 'room:1:ai',
+  sourceToken: { playerUid: 'ai' },
+  claimedBy: 'driver',
+  previousLease: aiLease,
+  now: now + 1,
+}).attempt, 2);
 const stale = stampPlayerPresence({ uid: 'b', name: 'B', isSittingOut: false, folded: false, allIn: false }, now - PLAYER_STALE_MS - 1);
 assert.equal(getActivePlayerCount({ players: [active, stale] }, now), 1);
 assert.equal(getActivePlayerCount({
@@ -253,7 +405,9 @@ const aiMaintenance = applyRoomMaintenance({
     { uid: 'ai-1', name: 'AI', isAi: true, isSittingOut: false, folded: false, allIn: false, lastSeenAt: 0 },
   ],
 }, now, 'a');
-assert.equal(aiMaintenance.changed, false);
+assert.equal(aiMaintenance.changed, true);
+assert.equal(aiMaintenance.shouldAdvance, false);
+assert.equal(aiMaintenance.room.lifecycleStatus, 'active');
 const maintenanceResult = applyRoomMaintenance({
   isPublic: false,
   hostUid: 'b',

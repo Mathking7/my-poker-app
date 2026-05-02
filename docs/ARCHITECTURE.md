@@ -14,6 +14,13 @@ Firestore room path:
 artifacts/{globalAppId}/public/data/rooms/{roomId}
 ```
 
+Related room indexes:
+
+```text
+artifacts/{globalAppId}/public/data/publicRoomIndex/{roomId}
+artifacts/{globalAppId}/users/{uid}/roomHistory/{roomId}
+```
+
 ## Boundaries
 
 ### Firestore
@@ -67,6 +74,8 @@ src/hooks/useAiTurnScheduler.js  browser-side execution scheduling and Firestore
 
 The AI scheduler waits for pauses and transitions to clear before committing one action. `getAiActionKey` defines the duplicate-action guard and is covered by logic tests.
 
+AI turns also use a short Firestore lease stored on the room as `aiTurnLease`. The elected driver claims the lease before running the worker; if that client stalls, another eligible client can take over after `expiresAt`. The lease window is intentionally longer than the normal think delay so transient Firestore latency does not invite a second browser to make a competing decision. `aiDiagnostics` stores lightweight non-card debug metadata such as the latest lease owner, action key, lease status, error time, and recovery marker.
+
 ### Styling
 
 Styles load in this order:
@@ -84,10 +93,15 @@ Browsers do not provide a reliable Firestore disconnect hook, so the app uses he
 
 - Active clients write `lastSeenAt`.
 - Stale players are detected after the configured timeout.
-- Empty rooms expire after the room TTL.
+- Public rooms leave the public index when empty, then expire after the public retention window.
+- Private rooms use the creator-selected retention window and are only discoverable by room id or personal history.
 - One elected maintenance client marks stale players offline, folds blocking players, advances stuck hands, and transfers private-room host rights.
 
-Maintenance rules live in `src/utils/roomMaintenance.js` and are tested in `scripts/logic-tests.mjs`.
+Maintenance rules live in `src/utils/roomMaintenance.js` and `src/utils/roomLifecycle.js`, and are tested in `scripts/logic-tests.mjs`. Cross-document cleanup such as deleting a room and its public index lives in `src/services/roomLifecycleActions.js`.
+
+## Firestore Rules
+
+`firestore.rules` is checked into the repo so personal history privacy is explicit. Current rules keep `users/{uid}/roomHistory` private to that anonymous auth uid. Room documents remain collaboratively writable because the app has no server-side arbiter yet; strict anti-cheat would require moving dealing and private hands to trusted server code or per-player private documents with stronger validation.
 
 ## Deployment Shape
 

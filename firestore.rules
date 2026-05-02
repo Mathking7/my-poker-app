@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsUserPath(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    match /artifacts/{appId}/users/{userId}/{document=**} {
+      allow read, write: if ownsUserPath(userId);
+    }
+
+    match /artifacts/{appId}/public/data/rooms/{roomId} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn();
+    }
+
+    match /artifacts/{appId}/public/data/publicRoomIndex/{roomId} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn();
+    }
+  }
+}

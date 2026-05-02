@@ -29,6 +29,7 @@ import {
 import { getStatusClass } from '../utils/pokerUi';
 import { canPlayerPotentiallyRaise, canPlayerTakeAction, getActionViewState } from '../utils/pokerViewState';
 import { createAiPlayer } from '../utils/pokerAi';
+import { ROOM_RETENTION_OPTIONS, applyRoomLifecycle, mergePersonalRecentHands, normalizeRoomRetentionPolicy } from '../utils/roomLifecycle';
 import {
   addLog,
   applyActionHoldTransition,
@@ -48,6 +49,12 @@ import {
   shouldCommitSettlementState,
   shouldCommitTransitionState,
 } from '../utils/pokerGameEngine';
+import {
+  appendHandAction,
+  appendHandHistoryEntry,
+  buildHandHistoryEntry,
+  createBlindAction,
+} from '../utils/pokerHandHistory';
 import GameLogDrawer from './poker/GameLogDrawer';
 import JoinRequestsBar from './poker/JoinRequestsBar';
 import OpponentCard from './poker/OpponentCard';
@@ -58,6 +65,7 @@ import TransitionBanner from './poker/TransitionBanner';
 import { useAiTurnScheduler } from '../hooks/useAiTurnScheduler';
 import { useNowMs } from '../hooks/useNowMs';
 import { usePresentedTransition } from '../hooks/usePresentedTransition';
+import { usePersonalRoomHistory } from '../hooks/usePersonalRoomHistory';
 import { useRoomMaintenance } from '../hooks/useRoomMaintenance';
 import { useRoomPresence } from '../hooks/useRoomPresence';
 import { useShowdownPresentation } from '../hooks/useShowdownPresentation';
@@ -66,10 +74,11 @@ import { useTurnTimer } from '../hooks/useTurnTimer';
 import { pauseTransitionClock, resumeTransitionClock } from '../utils/transitionClock';
 import {
   deleteFieldValue,
-  deleteRoomDocument,
+  deletePublicRoomIndexDocument,
   runRoomTransaction,
   setRoomDocument,
 } from '../services/roomRepository';
+import { deleteRoomWithIndexes, markUserRoomHistoryClosed } from '../services/roomLifecycleActions';
 
 export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const [copySuccess, setCopySuccess] = useState(false);
@@ -94,6 +103,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const logsEndRef = useRef(null);
   const roomDataRef = useRef(roomData);
   const manualActionInFlightRef = useRef(null);
+  const { personalRecentHands, personalRecentHandsRef } = usePersonalRoomHistory({
+    roomId,
+    roomData,
+    userUid: user?.uid,
+  });
 
   useEffect(() => {
     roomDataRef.current = roomData;
@@ -120,6 +134,12 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   const activeTransition = pausedTransition || (isTransitionActive(presentedTransition, nowMs)
     ? presentedTransition
     : (isTransitionActive(roomData?.transition, nowMs) ? roomData.transition : null));
+  const transitionReadySignal = Boolean(
+    roomData?.transition?.id &&
+    !roomData?.isPaused &&
+    !roomData.transition?.pausedAt &&
+    !isTransitionActive(roomData.transition, nowMs)
+  );
   const transitionProgress = activeTransition
     ? (activeTransition.pausedProgress ?? getTransitionProgress(activeTransition, nowMs))
     : 1;
@@ -148,6 +168,14 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   ].join(':');
   const isManualActionPending = Boolean(manualActionPendingKey && manualActionPendingKey === currentManualActionKey);
   const currentActionNeedsInput = playerNeedsAction(currentActionPlayer, roomData);
+  const aiTurnWatchdogSignal = (
+    currentActionPlayer?.isAi &&
+    currentActionNeedsInput &&
+    !roomData?.isPaused &&
+    !activeTransition
+  )
+    ? `retry:${Math.floor(nowMs / 5000)}`
+    : 'idle';
   const isMyTurn = roomData?.status !== 'waiting' && roomData?.status !== 'showdown' && currentActionPlayer?.uid === user?.uid && currentActionNeedsInput && !roomData?.isPaused && !isActionLocked;
   const isHost = roomData?.hostUid === user?.uid && user?.uid != null;
   const isCreator = roomData?.creatorUid === user?.uid; 
@@ -174,9 +202,21 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   // 找出当前轮到谁操作
   const currentPlayerUid = roomData?.players[roomData?.turnIndex]?.uid;
   // 推选裁判：按数组顺序，找出除了当前玩家之外，第一个在座的玩家
-  const designatedReferee = (roomData?.players || []).find(p => p.uid !== currentPlayerUid && !p.isSittingOut && !p.isAi);
+  const designatedReferee = (roomData?.players || []).find((player) => (
+    player.uid !== currentPlayerUid &&
+    !player.isSittingOut &&
+    !player.isAi &&
+    isPlayerActive(player, nowForRender, user?.uid, roomData)
+  ));
   // 判断当前正在运行代码的你，是不是被选中的裁判
   const isReferee = user?.uid === designatedReferee?.uid;
+  const canDriveAiTurn = Boolean(
+    user?.uid &&
+    (
+      maintenanceManagerUid === user.uid ||
+      (currentActionPlayer?.isAi && isReferee)
+    )
+  );
 
   // 加注计算
   const bettingOptions = getPlayerBettingOptions(roomData, myPlayerInfo);
@@ -370,13 +410,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     roomData,
     roomDataRef,
     roomId,
+    transitionReadySignal,
     userUid: user?.uid,
   });
-
-  // ==== 5. 聊天记录自动滚动 ====
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [roomData?.logs]);
 
   useEffect(() => {
     if (!canPotentiallyRaise || maxBet <= 0) {
@@ -537,6 +573,14 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       updatedAt: now,
       logs: addLog(roomData, `⏸️ 房主${willPause ? '暂停' : '恢复'}了对局。`),
     };
+    if (willPause && roomData.aiTurnLease) {
+      patch.aiTurnLease = null;
+      patch.aiDiagnostics = {
+        ...(roomData.aiDiagnostics || {}),
+        lastLeaseStatus: 'paused-cleared',
+        lastLeaseClearedAt: now,
+      };
+    }
     if (roomData.transition || nextTransition) {
       patch.transition = !willPause && nextTransition
         ? {
@@ -585,7 +629,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     if (!isHost) return;
     const nextSettings = normalizeGameSettings(localSettings);
     await setRoomDocument(roomId, {
-      ...roomData, settings: nextSettings, updatedAt: Date.now(), logs: addLog(roomData, '⚙️ 房主修改了房间设置 (下一局生效)')
+      ...roomData,
+      settings: nextSettings,
+      retentionPolicy: normalizeRoomRetentionPolicy(nextSettings.roomRetention, roomData.isPublic),
+      updatedAt: Date.now(),
+      logs: addLog(roomData, '⚙️ 房主修改了房间设置 (下一局生效)')
     });
     setLocalSettings(nextSettings);
     setShowSettingsModal(false);
@@ -599,6 +647,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     
     // 应用新设置
     nextData.settings = normalizeGameSettings(localSettings);
+    nextData.retentionPolicy = normalizeRoomRetentionPolicy(nextData.settings.roomRetention, nextData.isPublic);
     
     // 重置牌桌全局状态
     nextData.status = 'waiting';
@@ -646,7 +695,16 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     if (!window.confirm('确定要解散房间吗？此操作不可逆，所有人将被移出房间。')) return;
     
     try {
-      await deleteRoomDocument(roomId);
+      const now = Date.now();
+      await markUserRoomHistoryClosed({
+        uid: user.uid,
+        roomId,
+        roomData,
+        existingRecentHands: personalRecentHandsRef.current,
+        now,
+        reason: 'deleted',
+      }).catch(() => {});
+      await deleteRoomWithIndexes(roomId, roomId);
       setShowSettingsModal(false);
       onLeaveRoom(); // 调用传入的退出函数，返回大厅
     } catch (err) {
@@ -750,8 +808,19 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         }
       } else {
         nextData.players = nextData.players.filter(p => p.uid !== user.uid);
-        if (nextData.players.length === 0) {
-          await deleteRoomDocument(roomId);
+        const remainingHumanCount = nextData.players.filter(p => !p.isAi && !p.isKicked).length;
+        if (remainingHumanCount === 0) {
+          nextData.hostUid = null;
+          nextData.status = 'waiting';
+          nextData.isPaused = false;
+          nextData.turnIndex = -1;
+          nextData.logs = addLog(nextData, `🚪 ${me?.name || '玩家'} 离开房间，房间进入空置保留。`);
+          nextData.updatedAt = now;
+          nextData = applyRoomLifecycle(nextData, now, { activeHumanCount: 0 });
+          await setRoomDocument(roomId, nextData);
+          if (nextData.isPublic) {
+            await deletePublicRoomIndexDocument(roomId).catch(() => {});
+          }
         } else {
           if (isHost) {
             const nextHost = nextData.players.find(p => !p.isAi);
@@ -843,6 +912,14 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
       ? sbIndex
       : getNextActionIndex(players, bbIndex);
 
+    const handSeats = players.map((player, seatIndex) => ({
+      uid: player.uid,
+      name: player.name || '玩家',
+      seatIndex,
+      isAi: Boolean(player.isAi),
+      startChips: quantizeChipAmount(player.chips || 0, 'floor'),
+    }));
+
     const sbAmount = Math.min(baseBlind, players[sbIndex].chips);
     const bbAmount = Math.min(bigBlind, players[bbIndex].chips);
     
@@ -878,8 +955,15 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
 
     const newRoomState = {
       ...roomData, status: 'pre-flop', isPaused: false, dealerIndex: nextDealerIndex, turnIndex: utgIndex,
-      deck: deck, communityCards: [], pot: pot, currentBet, minRaise: bigBlind, players, logs, handCount, lastAggressorUid: null, handAggressorUid: null, settings, updatedAt: now, transition, settlement: null, allInRunout: false
+      deck: deck, communityCards: [], pot: pot, currentBet, minRaise: bigBlind, players, logs, handCount, lastAggressorUid: null, handAggressorUid: null, settings, updatedAt: now, transition, settlement: null, allInRunout: false, aiTurnLease: null,
+      handStartedAt: now,
+      handSeats,
+      handActions: [],
     };
+    newRoomState.handActions = [
+      createBlindAction({ room: newRoomState, player: players[sbIndex], actionType: 'SB', amount: sbAmount, now }),
+      createBlindAction({ room: newRoomState, player: players[bbIndex], actionType: 'BB', amount: bbAmount, now }),
+    ];
     if (utgIndex === -1 || players.filter(p => !p.folded && !p.allIn).length <= 1) {
       await setRoomDocument(roomId, newRoomState);
       return;
@@ -1048,6 +1132,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         pots: settlementResult.pots,
         totalAwarded: settlementResult.totalAwarded,
       };
+      appendHandHistoryEntry(
+        nextState,
+        buildHandHistoryEntry(nextState, nextState.settlement, nextState.updatedAt),
+      );
+      nextState.handActions = [];
       nextState.pot = 0;
       nextState.currentBet = 0;
       nextState.players.forEach(p => { p.bet = 0; p.hasActed = false; p.lastAction = null; p.totalContribution = 0; });
@@ -1101,6 +1190,11 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         }],
         totalAwarded: totalWon,
       };
+      appendHandHistoryEntry(
+        nextState,
+        buildHandHistoryEntry(nextState, nextState.settlement, finishedAt),
+      );
+      nextState.handActions = [];
       nextState.pot = 0;
       nextState.currentBet = 0;
       nextState.players.forEach(p => { p.bet = 0; p.hasActed = false; p.lastAction = null; p.totalContribution = 0; });
@@ -1239,12 +1333,15 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     roomId,
     roomData,
     roomDataRef,
-    canManageRoom,
+    canDriveAiTurn,
+    driverUid: user?.uid,
     actionSignal: currentManualActionKey,
     getActionSourceToken,
     playerNeedsAction,
     commitPlayerActionState,
     advanceGameState,
+    transitionReadySignal,
+    watchdogSignal: aiTurnWatchdogSignal,
   });
 
   const handleAction = async (actionType, amount = 0) => {
@@ -1291,11 +1388,29 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     
     if (reqCall === 0) {
       targetPlayer.lastAction = 'check';
-      nextState.logs = addLog(nextState, `⏱️ ${targetPlayer.name} 超时/掉线，系统自动看牌`);
+      nextState.logs = addLog(nextState, `⏱️ ${targetPlayer.name} 超时/掉线，系统自动过牌`);
+      appendHandAction(nextState, {
+        playerUid: targetPlayer.uid,
+        playerName: targetPlayer.name || '玩家',
+        actionType: 'check',
+        actionLabel: '过牌',
+        amount: 0,
+        totalBet: quantizeChipAmount(targetPlayer.bet || 0, 'floor'),
+        potAfter: quantizeChipAmount(nextState.pot || 0, 'floor'),
+      });
     } else {
       targetPlayer.folded = true;
       targetPlayer.lastAction = 'fold';
       nextState.logs = addLog(nextState, `⏱️ ${targetPlayer.name} 超时/掉线，系统自动弃牌`);
+      appendHandAction(nextState, {
+        playerUid: targetPlayer.uid,
+        playerName: targetPlayer.name || '玩家',
+        actionType: 'fold',
+        actionLabel: '弃牌',
+        amount: 0,
+        totalBet: quantizeChipAmount(targetPlayer.bet || 0, 'floor'),
+        potAfter: quantizeChipAmount(nextState.pot || 0, 'floor'),
+      });
     }
     
     targetPlayer.hasActed = true;
@@ -1316,6 +1431,9 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     : roomData.pot;
   const settlementPots = roomData.settlement?.pots || [];
   const showSettlementPanel = roomData.status === 'showdown' && settlementPots.length > 0 && showdownFinished;
+  const handHistoryForDrawer = React.useMemo(() => (
+    mergePersonalRecentHands(roomData.handHistory || [], personalRecentHands)
+  ), [roomData.handHistory, personalRecentHands]);
 
   const statusClass = getStatusClass(roomData?.status);
   const selectedPlayerLive = selectedPlayer
@@ -1486,6 +1604,7 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
         {/* ==== 修改：侧滑出式“对局动态”抽屉 ==== */}
         <GameLogDrawer
           logs={roomData.logs}
+          handHistory={handHistoryForDrawer}
           isOpen={isLogOpen}
           logsEndRef={logsEndRef}
           onClose={() => setIsLogOpen(false)}
@@ -1514,6 +1633,28 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
                   {[10, 30, '无限'].map(val => ( <button key={val} disabled={!isHost} onClick={() => setLocalSettings(normalizeGameSettings({...localSettings, timeLimit: val}))} className={`flex-1 py-2 rounded font-bold border transition ${localSettings.timeLimit === val ? 'bg-blue-600 text-white border-blue-500 shadow-lg' : 'bg-slate-900 border-slate-700 text-slate-400'} ${!isHost && 'opacity-60 cursor-not-allowed'}`}>{val === '无限' ? val : `${val}s`}</button> ))}
                 </div>
                 {typeof localSettings.timeLimit === 'number' && ( <input type="number" min={MIN_TIME_LIMIT} max={MAX_TIME_LIMIT} disabled={!isHost} value={localSettings.timeLimit} onChange={e => setLocalSettings(normalizeGameSettings({...localSettings, timeLimit: e.target.value}))} className={`w-full bg-slate-900 border border-slate-600 rounded-lg p-3 text-white outline-none ${!isHost && 'opacity-60 cursor-not-allowed'}`} placeholder="自定义秒数" /> )}
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-4">
+                <div className="mb-2 text-slate-300 font-medium">房间保留</div>
+                {roomData.isPublic ? (
+                  <p className="text-sm leading-relaxed text-slate-400">公开房间空置后会自动离开大厅列表，并保留 30 分钟。</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-4 gap-2">
+                      {ROOM_RETENTION_OPTIONS.map(option => (
+                        <button
+                          key={option.value}
+                          disabled={!isHost}
+                          onClick={() => setLocalSettings(normalizeGameSettings({ ...localSettings, roomRetention: option.value }))}
+                          className={`rounded border px-2 py-2 text-sm font-bold transition ${localSettings.roomRetention === option.value ? 'border-amber-400 bg-amber-400/15 text-amber-200' : 'border-slate-700 bg-slate-950 text-slate-400'} ${!isHost && 'opacity-60 cursor-not-allowed'}`}
+                        >
+                          {option.shortLabel}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">私密房间空置后按所选时间保留，之后自动清理。</p>
+                  </>
+                )}
               </div>
               <div className="space-y-4 pt-6 border-t border-slate-700">
                 <label className={`flex items-center justify-between text-slate-300 ${isHost ? 'cursor-pointer group' : 'opacity-60'}`}><span>允许对局中途添加他人 (下局进入)</span><input type="checkbox" disabled={!isHost} checked={localSettings.allowJoinDuringGame} onChange={e => setLocalSettings({...localSettings, allowJoinDuringGame: e.target.checked})} className="w-5 h-5 accent-emerald-500" /></label>

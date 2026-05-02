@@ -68,6 +68,38 @@
  * @property {boolean} allowJoinDuringGame
  * @property {boolean} doubleBlinds
  * @property {boolean} autoTopUp
+ * @property {'1h'|'24h'|'7d'|'30d'} roomRetention
+ */
+
+/**
+ * @typedef {Object} HandActionEntry
+ * @property {string} id
+ * @property {number} handNumber
+ * @property {PokerStatus|string} street
+ * @property {string} streetLabel
+ * @property {number} at
+ * @property {string} playerUid
+ * @property {string} playerName
+ * @property {PlayerAction|string} actionType
+ * @property {string} actionLabel
+ * @property {number} amount
+ * @property {number} [targetBet]
+ * @property {number} totalBet
+ * @property {number} potAfter
+ */
+
+/**
+ * @typedef {Object} HandHistoryEntry
+ * @property {string} id
+ * @property {string} roomId
+ * @property {number} handNumber
+ * @property {number} startedAt
+ * @property {number} endedAt
+ * @property {string[]} board
+ * @property {number} totalPot
+ * @property {SettlementPot[]} pots
+ * @property {HandActionEntry[]} actions
+ * @property {string} summary
  */
 
 /**
@@ -91,10 +123,17 @@
  *
  * @typedef {Object} PokerRoom
  * @property {string} id
+ * @property {string} roomInstanceId
  * @property {string|null} hostUid
  * @property {string} creatorUid
  * @property {number} createdAt
  * @property {number} updatedAt
+ * @property {number|null} [lastHumanActiveAt]
+ * @property {number|null} [emptySince]
+ * @property {number|null} [archiveAt]
+ * @property {number|null} [ttlAt]
+ * @property {'active'|'retaining'|'expired'} [lifecycleStatus]
+ * @property {string} [retentionPolicy]
  * @property {PokerStatus} status
  * @property {boolean} isPublic
  * @property {boolean} isPaused
@@ -107,6 +146,11 @@
  * @property {string[]} communityCards
  * @property {string[]} deck
  * @property {string[]} logs
+ * @property {HandActionEntry[]} [handActions]
+ * @property {HandHistoryEntry[]} [handHistory]
+ * @property {number|null} [handStartedAt]
+ * @property {{uid: string, name: string, seatIndex: number, startChips: number, isAi?: boolean}[]} [handSeats]
+ * @property {{handNumber: number, endedAt: number, summary: string, totalPot: number}} [lastHandSummary]
  * @property {GameSettings} settings
  * @property {Object.<string, {lastSeenAt: number}>} [presence]
  * @property {{uid: string, name: string, requestedAt: number, lastSeenAt?: number}[]} [joinRequests]
@@ -116,6 +160,8 @@
  * @property {boolean} [allInRunout]
  * @property {string|null} [lastAggressorUid]
  * @property {string|null} [handAggressorUid]
+ * @property {{actionKey: string, playerUid: string, claimedBy: string, claimedAt: number, expiresAt: number, attempt: number}|null} [aiTurnLease]
+ * @property {Object} [aiDiagnostics]
  */
 
 export {};

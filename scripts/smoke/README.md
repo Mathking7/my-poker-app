@@ -13,6 +13,13 @@ Common helpers:
 - `getCommonLayoutBoxes(page)`: reads table rectangles for overlap checks, including transition banner, community cards, pot, opponent cards, opponent action bubbles, opponent timers, opponent strip, and self panel.
 - `writeSmokeArtifact(name, result)` and `artifactPath(name)`: write JSON and screenshots under `SMOKE_OUTPUT_DIR`.
 
+Focused coverage:
+
+- `npm run smoke:personal-history`: checks the lobby/recent-room personal hand history view.
+- `npm run smoke:room-personal-history`: checks the in-room hand history drawer with the current user's private hole cards.
+- `npm run smoke:ai-single-action`: checks that an AI turn resolves once, clears the visible AI timer, and does not repeat the action.
+- `npm run smoke:room-create-isolation`: injects a marker into an old room, creates a new room, and verifies the new room does not inherit old players, logs, or room state.
+
 Environment knobs:
 
 ```powershell

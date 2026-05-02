@@ -5,6 +5,7 @@ import {
   getPlayerBettingOptions,
   isTransitionActive,
 } from './gameFlow.js';
+import { appendHandAction, getActionLabel } from './pokerHandHistory.js';
 import { isGameInProgress, stampPlayerPresence } from './roomMaintenance.js';
 
 export const addLog = (data, msg, maxEntries = 50) => {
@@ -240,6 +241,20 @@ export const applyPlayerActionToState = ({
   const actionBettingOptions = getPlayerBettingOptions(nextState, me);
   const callAmount = actionBettingOptions.callAmount;
   const now = Date.now();
+  const recordAction = ({ action, amountPutIn = 0, targetBet = me.bet }) => {
+    appendHandAction(nextState, {
+      at: now,
+      playerUid: me.uid,
+      playerName: me.name || '玩家',
+      actionType: action,
+      actionLabel: getActionLabel(action),
+      amount: quantizeChipAmount(amountPutIn, 'floor'),
+      targetBet: quantizeChipAmount(targetBet || 0, 'floor'),
+      totalBet: quantizeChipAmount(me.bet || 0, 'floor'),
+      potAfter: quantizeChipAmount(nextState.pot || 0, 'floor'),
+      allIn: Boolean(me.allIn),
+    });
+  };
   if (me.isAi) {
     me.lastSeenAt = now;
     me.isOnline = true;
@@ -252,6 +267,7 @@ export const applyPlayerActionToState = ({
     me.folded = true;
     me.lastAction = 'fold';
     nextState.logs = addLogEntry(nextState, `${me.name} 弃牌`);
+    recordAction({ action: 'fold' });
   } else if (actionType === 'call') {
     const actualCall = Math.min(callAmount, me.chips);
     me.chips -= actualCall;
@@ -262,6 +278,11 @@ export const applyPlayerActionToState = ({
     me.lastAction = me.allIn ? 'allin' : (callAmount === 0 ? 'check' : 'call');
     const actName = callAmount === 0 ? '过牌' : '跟注';
     nextState.logs = addLogEntry(nextState, `${me.name} ${actName} ${actualCall > 0 ? actualCall : ''}`);
+    recordAction({
+      action: me.lastAction,
+      amountPutIn: actualCall,
+      targetBet: me.bet,
+    });
   } else if (actionType === 'raise') {
     if (!actionBettingOptions.canRaise) return false;
     const maxBet = actionBettingOptions.maxBet;
@@ -297,6 +318,11 @@ export const applyPlayerActionToState = ({
       });
     }
     nextState.logs = addLogEntry(nextState, `${me.name} ${isFullRaise ? '加注' : '全下'}到 ${me.bet}`);
+    recordAction({
+      action: me.lastAction,
+      amountPutIn: actualPutIn,
+      targetBet: me.bet,
+    });
   } else {
     return false;
   }

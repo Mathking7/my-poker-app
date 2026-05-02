@@ -1374,7 +1374,7 @@
   .poker-community-cards {
     height: 3rem;
     gap: 0.28rem;
-    transform: translateY(-1.1rem);
+    transform: translateY(-1.45rem);
   }
 
   .poker-card-mobile {

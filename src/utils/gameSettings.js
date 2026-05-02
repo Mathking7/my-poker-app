@@ -1,4 +1,5 @@
 import { clampChipAmount } from './chipMath.js';
+import { DEFAULT_PRIVATE_ROOM_RETENTION, normalizeRoomRetentionPolicy } from './roomLifecycle.js';
 
 export const MIN_INITIAL_CHIPS = 100;
 export const MAX_INITIAL_CHIPS = 100000;
@@ -11,6 +12,7 @@ export const DEFAULT_SETTINGS = {
   allowJoinDuringGame: true,
   doubleBlinds: false,
   autoTopUp: false,
+  roomRetention: DEFAULT_PRIVATE_ROOM_RETENTION,
 };
 
 export const clampNumber = (value, min, max, fallback) => {
@@ -31,6 +33,7 @@ export const normalizeGameSettings = (settings = {}) => {
     allowJoinDuringGame: Boolean(merged.allowJoinDuringGame),
     doubleBlinds: Boolean(merged.doubleBlinds),
     autoTopUp: Boolean(merged.autoTopUp),
+    roomRetention: normalizeRoomRetentionPolicy(merged.roomRetention, false),
   };
 };
 

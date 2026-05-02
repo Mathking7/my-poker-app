@@ -1,6 +1,12 @@
+import {
+  applyRoomLifecycle,
+  getRoomLifecycleState,
+  hasLifecycleChanged,
+} from './roomLifecycle.js';
+
 export const PRESENCE_HEARTBEAT_MS = 15000;
 export const PLAYER_STALE_MS = 45000;
-export const EMPTY_ROOM_TTL_MS = 3 * 60 * 1000;
+export const EMPTY_ROOM_TTL_MS = 30 * 60 * 1000;
 
 export const toMillis = (value) => {
   if (!value) return 0;
@@ -64,14 +70,34 @@ export const getLastRoomPresenceAt = (room) => {
 
 export const isRoomExpired = (room, now = Date.now()) => {
   const players = room?.players || [];
-  if (players.length === 0) return true;
-  if (getActivePlayerCount(room, now) > 0) return false;
+  const activeHumanCount = getActivePlayerCount(room, now);
+  if (activeHumanCount > 0) return false;
+
+  const lifecycle = getRoomLifecycleState(room, now, { activeHumanCount });
+  if (lifecycle.isExpired) return true;
+  if (players.length === 0) {
+    const hasAnyLifecycleClock = Boolean(
+      toMillis(room?.emptySince) ||
+      toMillis(room?.archiveAt) ||
+      toMillis(room?.ttlAt) ||
+      toMillis(room?.lastHumanActiveAt) ||
+      toMillis(room?.updatedAt) ||
+      toMillis(room?.createdAt)
+    );
+    return !hasAnyLifecycleClock;
+  }
 
   const lastPresenceAt = getLastRoomPresenceAt(room);
-  if (lastPresenceAt > 0) return now - lastPresenceAt > EMPTY_ROOM_TTL_MS;
+  if (lastPresenceAt > 0 && !room.emptySince && !room.archiveAt && !room.ttlAt) {
+    return now - lastPresenceAt > EMPTY_ROOM_TTL_MS;
+  }
 
   const migrationStartedAt = toMillis(room?.presenceMigrationStartedAt);
-  return migrationStartedAt > 0 && now - migrationStartedAt > EMPTY_ROOM_TTL_MS;
+  return migrationStartedAt > 0 &&
+    !room.emptySince &&
+    !room.archiveAt &&
+    !room.ttlAt &&
+    now - migrationStartedAt > EMPTY_ROOM_TTL_MS;
 };
 
 const appendMaintenanceLog = (logs = [], message) => {
@@ -144,6 +170,15 @@ export const applyRoomMaintenance = (room, now = Date.now(), activeUid = null) =
   });
 
   let nextRoom = changed ? { ...room, players: nextPlayers, updatedAt: now } : room;
+  const activeHumanCount = getActivePlayerCount({ ...nextRoom, players: nextPlayers }, now, activeUid);
+  const lifecycleRoom = applyRoomLifecycle(nextRoom, now, { activeHumanCount });
+  if (hasLifecycleChanged(nextRoom, lifecycleRoom)) {
+    nextRoom = {
+      ...lifecycleRoom,
+      updatedAt: now,
+    };
+    changed = true;
+  }
 
   if (!toMillis(room.presenceMigrationStartedAt) && nextPlayers.some((player) => !player.isAi && getPlayerLastSeenAt(room, player) === 0)) {
     nextRoom = {

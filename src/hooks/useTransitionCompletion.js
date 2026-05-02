@@ -14,6 +14,7 @@ export const useTransitionCompletion = ({
   roomData,
   roomDataRef,
   roomId,
+  transitionReadySignal = false,
   userUid,
 }) => {
   const transitionCompletionInFlightRef = useRef(null);
@@ -73,6 +74,7 @@ export const useTransitionCompletion = ({
     roomData?.transition?.pausedAt,
     roomDataRef,
     roomId,
+    transitionReadySignal,
     userUid,
   ]);
 };
