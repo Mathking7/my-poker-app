@@ -159,13 +159,15 @@ Firebase Console -> Firestore Database -> Rules -> Publish
 
 Current rules keep `users/{uid}/roomHistory` private to the same anonymous auth uid. Room documents are still collaboratively writable by signed-in users because the current app has no server-side arbiter. Strict anti-cheat, server-side dealing, or fully private per-player hands should be handled in a later backend-backed version.
 
-Rules automation is scaffolded in `.github/workflows/firebase-rules.yml`. It deploys only when `firestore.rules`, `firebase.json`, or the workflow itself changes, and it safely skips itself if secrets are not configured.
+Rules automation is scaffolded in `.github/workflows/firebase-rules.yml`. It deploys only when `firestore.rules`, `firebase.json`, or the workflow itself changes. The workflow publishes staging and production rules independently, and safely skips any environment whose secrets are not configured.
 
 Required GitHub repository secrets:
 
 ```text
-FIREBASE_PROJECT_ID
-FIREBASE_SERVICE_ACCOUNT_JSON
+FIREBASE_STAGING_PROJECT_ID
+FIREBASE_STAGING_SERVICE_ACCOUNT_JSON
+FIREBASE_PRODUCTION_PROJECT_ID
+FIREBASE_PRODUCTION_SERVICE_ACCOUNT_JSON
 ```
 
-`FIREBASE_SERVICE_ACCOUNT_JSON` should be the full JSON content of a Firebase service account with permission to deploy Firestore rules. Do not commit Firebase service-account credentials to the repository.
+Each `*_SERVICE_ACCOUNT_JSON` secret should be the full JSON content of a Firebase service account with permission to deploy Firestore rules for that Firebase project. Do not commit Firebase service-account credentials to the repository.

@@ -16,6 +16,16 @@ permissions:
 jobs:
   deploy-firestore-rules:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: staging
+            project_id_secret: FIREBASE_STAGING_PROJECT_ID
+            service_account_secret: FIREBASE_STAGING_SERVICE_ACCOUNT_JSON
+          - name: production
+            project_id_secret: FIREBASE_PRODUCTION_PROJECT_ID
+            service_account_secret: FIREBASE_PRODUCTION_SERVICE_ACCOUNT_JSON
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -24,11 +34,11 @@ jobs:
         id: firebase-secrets
         shell: bash
         env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_PROJECT_ID: ${{ secrets[matrix.project_id_secret] }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets[matrix.service_account_secret] }}
         run: |
           if [ -z "$FIREBASE_PROJECT_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "::notice::Skipping Firestore rules deploy because FIREBASE_PROJECT_ID or FIREBASE_SERVICE_ACCOUNT_JSON is not configured."
+            echo "::notice::Skipping Firestore rules deploy for ${{ matrix.name }} because ${{ matrix.project_id_secret }} or ${{ matrix.service_account_secret }} is not configured."
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -48,11 +58,11 @@ jobs:
         run: |
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/firebase-service-account.json"
 
-      - name: Deploy Firestore rules
+      - name: Deploy Firestore rules to ${{ matrix.name }}
         if: steps.firebase-secrets.outputs.configured == 'true'
         shell: bash
         env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_PROJECT_ID: ${{ secrets[matrix.project_id_secret] }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
         run: |
           npx --yes firebase-tools deploy --only firestore:rules --project "$FIREBASE_PROJECT_ID" --non-interactive
