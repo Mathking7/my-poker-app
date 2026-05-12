@@ -57,7 +57,7 @@ The committed `vercel.json` is the source of truth for production routing and he
 - Vite build output is served from `dist`.
 - Production builds run `npm run lint && npm run test:logic && npm run build`.
 - Every non-file route rewrites to `/index.html`, which keeps future SPA deep links from returning a Vercel 404.
-- The ignored build step skips Vercel builds when a commit only changes docs, GitHub workflows, smoke scripts, or Firestore rules. Commits that touch `src`, build config, `package.json`, `vercel.json`, or logic tests still build.
+- The ignored build step skips Vercel builds when only docs, GitHub workflows, smoke scripts, or Firestore rules changed since the previous successful Vercel deployment. Commits that touch `src`, build config, `package.json`, `vercel.json`, or logic tests still build.
 - Low-risk browser security headers are applied globally:
   - `X-Content-Type-Options: nosniff`
   - `Referrer-Policy: strict-origin-when-cross-origin`

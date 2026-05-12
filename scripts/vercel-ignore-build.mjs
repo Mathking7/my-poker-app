@@ -20,7 +20,23 @@ const runGit = (args) => execFileSync('git', args, {
   stdio: ['ignore', 'pipe', 'ignore'],
 }).trim();
 
+const readChangedFiles = (fromRef, toRef) => runGit(['diff', '--name-only', fromRef, toRef])
+  .split(/\r?\n/)
+  .map((file) => file.replace(/\\/g, '/').trim())
+  .filter(Boolean);
+
 const getChangedFiles = () => {
+  const previousSha = process.env.VERCEL_GIT_PREVIOUS_SHA?.trim();
+  const currentSha = process.env.VERCEL_GIT_COMMIT_SHA?.trim() || 'HEAD';
+
+  if (previousSha && previousSha !== currentSha) {
+    try {
+      return readChangedFiles(previousSha, currentSha);
+    } catch {
+      console.log('Could not diff against VERCEL_GIT_PREVIOUS_SHA; falling back to HEAD^.');
+    }
+  }
+
   try {
     runGit(['rev-parse', 'HEAD^']);
   } catch {
@@ -28,10 +44,7 @@ const getChangedFiles = () => {
   }
 
   try {
-    return runGit(['diff', '--name-only', 'HEAD^', 'HEAD'])
-      .split(/\r?\n/)
-      .map((file) => file.replace(/\\/g, '/').trim())
-      .filter(Boolean);
+    return readChangedFiles('HEAD^', 'HEAD');
   } catch {
     return null;
   }
