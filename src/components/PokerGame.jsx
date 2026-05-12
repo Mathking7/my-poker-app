@@ -168,14 +168,6 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
   ].join(':');
   const isManualActionPending = Boolean(manualActionPendingKey && manualActionPendingKey === currentManualActionKey);
   const currentActionNeedsInput = playerNeedsAction(currentActionPlayer, roomData);
-  const aiTurnWatchdogSignal = (
-    currentActionPlayer?.isAi &&
-    currentActionNeedsInput &&
-    !roomData?.isPaused &&
-    !activeTransition
-  )
-    ? `retry:${Math.floor(nowMs / 5000)}`
-    : 'idle';
   const isMyTurn = roomData?.status !== 'waiting' && roomData?.status !== 'showdown' && currentActionPlayer?.uid === user?.uid && currentActionNeedsInput && !roomData?.isPaused && !isActionLocked;
   const isHost = roomData?.hostUid === user?.uid && user?.uid != null;
   const isCreator = roomData?.creatorUid === user?.uid; 
@@ -1341,7 +1333,6 @@ export default function PokerGame({ user, roomId, roomData, onLeaveRoom }) {
     commitPlayerActionState,
     advanceGameState,
     transitionReadySignal,
-    watchdogSignal: aiTurnWatchdogSignal,
   });
 
   const handleAction = async (actionType, amount = 0) => {

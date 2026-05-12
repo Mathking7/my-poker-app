@@ -11,6 +11,9 @@ import {
 } from '../utils/pokerAiTurn';
 import { runRoomTransaction } from '../services/roomRepository';
 
+const AI_STALL_RECOVERY_MS = 5500;
+const AI_RETRY_WAIT_MS = 350;
+
 export const useAiTurnScheduler = ({
   roomId,
   roomData,
@@ -23,7 +26,6 @@ export const useAiTurnScheduler = ({
   commitPlayerActionState,
   advanceGameState,
   transitionReadySignal = false,
-  watchdogSignal = '',
 }) => {
   const aiActionInFlightRef = useRef(null);
 
@@ -46,6 +48,7 @@ export const useAiTurnScheduler = ({
 
     const actionKey = getAiActionKey(roomId, sourceToken);
     if (aiActionInFlightRef.current === actionKey) return undefined;
+    aiActionInFlightRef.current = actionKey;
 
     let cancelled = false;
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,7 +60,7 @@ export const useAiTurnScheduler = ({
       : 0;
 
     const timeoutId = setTimeout(async () => {
-      aiActionInFlightRef.current = actionKey;
+      let recoveryTimeoutId = null;
       let rejectedAttempts = 0;
       const getErrorMessage = (err) => err?.message || String(err);
 
@@ -157,6 +160,28 @@ export const useAiTurnScheduler = ({
         }).catch((err) => console.error('AI Lease Clear Error:', err));
       };
 
+      const getSameLiveAiTurn = () => {
+        const latestRoom = roomDataRef.current;
+        const latestAiIndex = latestRoom?.turnIndex;
+        const latestAiPlayer = latestRoom?.players?.[latestAiIndex];
+        const latestToken = getActionSourceToken(latestRoom, latestAiIndex);
+        if (
+          !latestRoom ||
+          !latestAiPlayer?.isAi ||
+          latestAiPlayer.uid !== currentAiPlayer.uid ||
+          !latestToken ||
+          getAiActionKey(roomId, latestToken) !== actionKey ||
+          !playerNeedsAction(latestAiPlayer, latestRoom) ||
+          !isGameInProgress(latestRoom.status) ||
+          latestRoom.isPaused ||
+          latestRoom.transition?.pausedAt ||
+          isTransitionActive(latestRoom.transition)
+        ) {
+          return null;
+        }
+        return { latestRoom, latestAiPlayer };
+      };
+
       const commitAiDecision = async (currentRoom, aiPlayer, decision) => {
         const actionCommit = await commitPlayerActionState(currentRoom, decision.actionType, decision.amount, {
           expectedUid: aiPlayer.uid,
@@ -178,25 +203,36 @@ export const useAiTurnScheduler = ({
       };
 
       const tryRecoveryDecision = async () => {
-        const latestRoom = roomDataRef.current;
-        const latestAiIndex = latestRoom?.turnIndex;
-        const latestAiPlayer = latestRoom?.players?.[latestAiIndex];
-        if (
-          !latestRoom ||
-          !latestAiPlayer?.isAi ||
-          latestAiPlayer.uid !== currentAiPlayer.uid ||
-          !playerNeedsAction(latestAiPlayer, latestRoom) ||
-          !isGameInProgress(latestRoom.status) ||
-          latestRoom.isPaused ||
-          latestRoom.transition?.pausedAt ||
-          isTransitionActive(latestRoom.transition)
-        ) {
-          return false;
-        }
-        return commitAiDecision(latestRoom, latestAiPlayer, getSafeAiRecoveryDecision(latestRoom, latestAiPlayer));
+        const liveTurn = getSameLiveAiTurn();
+        if (!liveTurn) return false;
+        return commitAiDecision(
+          liveTurn.latestRoom,
+          liveTurn.latestAiPlayer,
+          getSafeAiRecoveryDecision(liveTurn.latestRoom, liveTurn.latestAiPlayer),
+        );
       };
 
       try {
+        recoveryTimeoutId = setTimeout(() => {
+          if (cancelled) return;
+          tryRecoveryDecision()
+            .then((recovered) => {
+              if (recovered) {
+                return writeAiDiagnostics({
+                  lastActionKey: actionKey,
+                  lastRecoveryAt: Date.now(),
+                  lastRecoveryReason: 'stall-deadline',
+                });
+              }
+              return null;
+            })
+            .catch((err) => writeAiDiagnostics({
+              lastActionKey: actionKey,
+              lastRecoveryErrorAt: Date.now(),
+              lastRecoveryError: getErrorMessage(err),
+            }));
+        }, AI_STALL_RECOVERY_MS);
+
         let leaseResult = null;
         for (let leaseAttempt = 0; leaseAttempt < 3 && !cancelled; leaseAttempt += 1) {
           leaseResult = await claimAiLease();
@@ -279,9 +315,10 @@ export const useAiTurnScheduler = ({
             await tryRecoveryDecision();
             break;
           }
-          await wait(350);
+          await wait(AI_RETRY_WAIT_MS);
         }
       } finally {
+        clearTimeout(recoveryTimeoutId);
         if (aiActionInFlightRef.current === actionKey) {
           aiActionInFlightRef.current = null;
         }
@@ -306,6 +343,5 @@ export const useAiTurnScheduler = ({
     roomData?.transition?.pausedAt,
     roomId,
     transitionReadySignal,
-    watchdogSignal,
   ]);
 };
