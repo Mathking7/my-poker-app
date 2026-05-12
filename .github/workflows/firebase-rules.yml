@@ -61,6 +61,46 @@ jobs:
         run: |
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/firebase-service-account.json"
 
+      - name: Validate Firebase credentials
+        if: steps.firebase-secrets.outputs.configured == 'true'
+        shell: bash
+        env:
+          EXPECTED_PROJECT_ID: ${{ matrix.project_id }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const file = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+          const expectedProjectId = process.env.EXPECTED_PROJECT_ID;
+          let credentials;
+          try {
+            credentials = JSON.parse(readFileSync(file, 'utf8'));
+          } catch {
+            console.error('Firebase service account secret is not valid JSON.');
+            process.exit(1);
+          }
+
+          const requiredFields = ['type', 'project_id', 'private_key', 'client_email'];
+          const missingFields = requiredFields.filter((field) => !credentials[field]);
+          if (missingFields.length) {
+            console.error(`Firebase service account secret is missing required field(s): ${missingFields.join(', ')}`);
+            process.exit(1);
+          }
+
+          if (credentials.type !== 'service_account') {
+            console.error('Firebase service account secret must have type "service_account".');
+            process.exit(1);
+          }
+
+          if (credentials.project_id !== expectedProjectId) {
+            console.error(`Firebase service account project_id does not match ${expectedProjectId}.`);
+            process.exit(1);
+          }
+
+          console.log(`Firebase service account JSON is valid for ${expectedProjectId}.`);
+          NODE
+
       - name: Deploy Firestore rules to ${{ matrix.name }}
         if: steps.firebase-secrets.outputs.configured == 'true'
         shell: bash
