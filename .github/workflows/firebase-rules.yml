@@ -21,10 +21,10 @@ jobs:
       matrix:
         include:
           - name: staging
-            project_id_secret: FIREBASE_STAGING_PROJECT_ID
+            project_id: mypoker-staging
             service_account_secret: FIREBASE_STAGING_SERVICE_ACCOUNT_JSON
           - name: production
-            project_id_secret: FIREBASE_PRODUCTION_PROJECT_ID
+            project_id: mypoker-e6f9c
             service_account_secret: FIREBASE_PRODUCTION_SERVICE_ACCOUNT_JSON
     steps:
       - name: Check out repository
@@ -34,21 +34,18 @@ jobs:
         id: firebase-secrets
         shell: bash
         env:
-          FIREBASE_PROJECT_ID: ${{ secrets[matrix.project_id_secret] }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets[matrix.service_account_secret] }}
         run: |
-          if [ -z "$FIREBASE_PROJECT_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "::notice::Skipping Firestore rules deploy for ${{ matrix.name }} because ${{ matrix.project_id_secret }} or ${{ matrix.service_account_secret }} is not configured."
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::notice::Skipping Firestore rules deploy for ${{ matrix.name }} because ${{ matrix.service_account_secret }} is not configured."
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          project_id="$(printf '%s' "$FIREBASE_PROJECT_ID" | tr -d '\r\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/^[A-Z_]+_PROJECT_ID=//')"
-          if ! printf '%s' "$project_id" | grep -Eq '^[a-z][a-z0-9-]{4,28}[a-z0-9]$'; then
-            echo "::error::${{ matrix.project_id_secret }} is not a valid Firebase project ID. Use only the raw project ID, for example mypoker-staging or mypoker-e6f9c."
+          if ! printf '%s' '${{ matrix.project_id }}' | grep -Eq '^[a-z][a-z0-9-]{4,28}[a-z0-9]$'; then
+            echo "::error::Workflow matrix project_id is not a valid Firebase project ID."
             exit 1
           fi
           echo "configured=true" >> "$GITHUB_OUTPUT"
-          echo "project_id=$project_id" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node
         if: steps.firebase-secrets.outputs.configured == 'true'
@@ -70,7 +67,7 @@ jobs:
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
         run: |
-          npx --yes firebase-tools deploy --only firestore:rules --project "${{ steps.firebase-secrets.outputs.project_id }}" --non-interactive
+          npx --yes firebase-tools deploy --only firestore:rules --project "${{ matrix.project_id }}" --non-interactive
 
       - name: Remove Firebase credentials
         if: always() && steps.firebase-secrets.outputs.configured == 'true'

@@ -164,10 +164,15 @@ Rules automation is scaffolded in `.github/workflows/firebase-rules.yml`. It dep
 Required GitHub repository secrets:
 
 ```text
-FIREBASE_STAGING_PROJECT_ID
 FIREBASE_STAGING_SERVICE_ACCOUNT_JSON
-FIREBASE_PRODUCTION_PROJECT_ID
 FIREBASE_PRODUCTION_SERVICE_ACCOUNT_JSON
+```
+
+The Firebase project IDs are public project configuration and are fixed in `.github/workflows/firebase-rules.yml`:
+
+```text
+staging: mypoker-staging
+production: mypoker-e6f9c
 ```
 
 Each `*_SERVICE_ACCOUNT_JSON` secret should be the full JSON content of a Firebase service account with permission to deploy Firestore rules for that Firebase project. Do not commit Firebase service-account credentials to the repository.
