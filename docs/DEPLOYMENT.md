@@ -48,9 +48,18 @@ Vercel project settings:
 
 ```text
 Framework: Vite
-Build Command: npm run build
+Build Command: npm run lint && npm run test:logic && npm run build
 Output Directory: dist
 ```
+
+The committed `vercel.json` is the source of truth for production routing and headers:
+
+- Vite build output is served from `dist`.
+- Every non-file route rewrites to `/index.html`, which keeps future SPA deep links from returning a Vercel 404.
+- Low-risk browser security headers are applied globally:
+  - `X-Content-Type-Options: nosniff`
+  - `Referrer-Policy: strict-origin-when-cross-origin`
+  - `Permissions-Policy: camera=(), microphone=(), geolocation=()`
 
 Required environment variables:
 
@@ -63,18 +72,61 @@ VITE_FIREBASE_MESSAGING_SENDER_ID
 VITE_FIREBASE_APP_ID
 ```
 
-After pushing to the connected GitHub branch, Vercel should deploy automatically. If manual deploy is needed, run from the project root after login:
+Default production flow:
+
+```powershell
+git push origin main
+```
+
+The connected GitHub integration should deploy `main` automatically. Do not also run `vercel --prod` for the same commit, otherwise Vercel will create a duplicate production deployment. Use manual CLI deploy only when GitHub auto-deploy is unavailable or an emergency redeploy is needed:
 
 ```powershell
 vercel --prod
 ```
+
+After deployment, verify:
+
+```powershell
+vercel inspect https://my-poker-app-liard.vercel.app
+```
+
+For a production smoke test, point the browser smoke harness at the production URL:
+
+```powershell
+$env:SMOKE_BASE_URL='https://my-poker-app-liard.vercel.app'
+$env:NODE_PATH='C:\Users\26808\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
+npm run smoke:quick
+npm run smoke:ai-single-action
+```
+
+## Preview Firebase
+
+The current production app points at the Firebase project configured by `VITE_FIREBASE_*`. Vercel Preview deployments should ideally use a separate staging Firebase project so test rooms and smoke data do not enter the production Firestore database.
+
+Recommended setup when a staging Firebase project is available:
+
+1. Create a second Firebase project for staging.
+2. Enable Anonymous Authentication and Firestore in that project.
+3. In Vercel, set the staging `VITE_FIREBASE_*` values for the Preview environment.
+4. Keep the current production Firebase values only in the Production environment.
+5. Deploy `firestore.rules` to both Firebase projects whenever rules change.
+
+Do not change production environment variables until the staging project has been tested with `smoke:quick` and `smoke:ai-single-action`.
 
 ## Firebase Rules
 
 Vercel only deploys the static app. Firestore rules must be deployed separately when `firestore.rules` changes:
 
 ```powershell
-firebase deploy --only firestore:rules
+npx --yes firebase-tools deploy --only firestore:rules --project mypoker-e6f9c
+```
+
+If Firebase CLI login is unavailable, publish the same `firestore.rules` content from Firebase Console:
+
+```text
+Firebase Console -> Firestore Database -> Rules -> Publish
 ```
 
 Current rules keep `users/{uid}/roomHistory` private to the same anonymous auth uid. Room documents are still collaboratively writable by signed-in users because the current app has no server-side arbiter. Strict anti-cheat, server-side dealing, or fully private per-player hands should be handled in a later backend-backed version.
+
+Rules automation can be added later with GitHub Actions, but only after Firebase credentials or Workload Identity are configured as GitHub repository secrets. Do not commit Firebase service-account credentials to the repository.

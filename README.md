@@ -72,12 +72,12 @@ scripts/smoke/                      Playwright 浏览器 smoke 测试
 Vercel 使用：
 
 ```text
-buildCommand: npm run build
+buildCommand: npm run lint && npm run test:logic && npm run build
 outputDirectory: dist
 framework: vite
 ```
 
-Vercel 环境变量需要与本地 `.env` 中的 `VITE_FIREBASE_*` 一致。部署前确认 lint、逻辑测试和构建通过。
+Vercel 环境变量需要与本地 `.env` 中的 `VITE_FIREBASE_*` 一致。`main` 分支推送后由 GitHub 集成自动部署，通常不需要再手动运行 `vercel --prod`。Firestore 规则不随 Vercel 部署，需要按 [部署流程](docs/DEPLOYMENT.md) 单独发布。
 
 更多说明见：
 
