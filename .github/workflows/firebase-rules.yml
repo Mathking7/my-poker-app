@@ -1,0 +1,64 @@
+name: Deploy Firestore Rules
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - firestore.rules
+      - firebase.json
+      - .github/workflows/firebase-rules.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-firestore-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check Firebase secrets
+        id: firebase-secrets
+        shell: bash
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$FIREBASE_PROJECT_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::notice::Skipping Firestore rules deploy because FIREBASE_PROJECT_ID or FIREBASE_SERVICE_ACCOUNT_JSON is not configured."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        if: steps.firebase-secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Write Firebase credentials
+        if: steps.firebase-secrets.outputs.configured == 'true'
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/firebase-service-account.json"
+
+      - name: Deploy Firestore rules
+        if: steps.firebase-secrets.outputs.configured == 'true'
+        shell: bash
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+        run: |
+          npx --yes firebase-tools deploy --only firestore:rules --project "$FIREBASE_PROJECT_ID" --non-interactive
+
+      - name: Remove Firebase credentials
+        if: always() && steps.firebase-secrets.outputs.configured == 'true'
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/firebase-service-account.json"

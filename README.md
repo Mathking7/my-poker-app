@@ -20,6 +20,8 @@ VITE_FIREBASE_MESSAGING_SENDER_ID=
 VITE_FIREBASE_APP_ID=
 ```
 
+Committed `.env.example` is the safe template. Keep real `.env` and `.env.local` values out of Git.
+
 提交或部署前至少运行：
 
 ```powershell
@@ -75,6 +77,12 @@ Vercel 使用：
 buildCommand: npm run lint && npm run test:logic && npm run build
 outputDirectory: dist
 framework: vite
+```
+
+Production smoke verification:
+
+```powershell
+npm run verify:prod
 ```
 
 Vercel 环境变量需要与本地 `.env` 中的 `VITE_FIREBASE_*` 一致。`main` 分支推送后由 GitHub 集成自动部署，通常不需要再手动运行 `vercel --prod`。Firestore 规则不随 Vercel 部署，需要按 [部署流程](docs/DEPLOYMENT.md) 单独发布。

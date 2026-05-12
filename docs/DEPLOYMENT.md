@@ -55,7 +55,9 @@ Output Directory: dist
 The committed `vercel.json` is the source of truth for production routing and headers:
 
 - Vite build output is served from `dist`.
+- Production builds run `npm run lint && npm run test:logic && npm run build`.
 - Every non-file route rewrites to `/index.html`, which keeps future SPA deep links from returning a Vercel 404.
+- The ignored build step skips Vercel builds when a commit only changes docs, GitHub workflows, smoke scripts, or Firestore rules. Commits that touch `src`, build config, `package.json`, `vercel.json`, or logic tests still build.
 - Low-risk browser security headers are applied globally:
   - `X-Content-Type-Options: nosniff`
   - `Referrer-Policy: strict-origin-when-cross-origin`
@@ -99,6 +101,13 @@ npm run smoke:quick
 npm run smoke:ai-single-action
 ```
 
+Or use the bundled production verification script:
+
+```powershell
+$env:NODE_PATH='C:\Users\26808\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
+npm run verify:prod
+```
+
 ## Preview Firebase
 
 The current production app points at the Firebase project configured by `VITE_FIREBASE_*`. Vercel Preview deployments should ideally use a separate staging Firebase project so test rooms and smoke data do not enter the production Firestore database.
@@ -112,6 +121,19 @@ Recommended setup when a staging Firebase project is available:
 5. Deploy `firestore.rules` to both Firebase projects whenever rules change.
 
 Do not change production environment variables until the staging project has been tested with `smoke:quick` and `smoke:ai-single-action`.
+
+Suggested Vercel CLI flow after the staging Firebase web app exists:
+
+```powershell
+vercel env add VITE_FIREBASE_API_KEY preview
+vercel env add VITE_FIREBASE_AUTH_DOMAIN preview
+vercel env add VITE_FIREBASE_PROJECT_ID preview
+vercel env add VITE_FIREBASE_STORAGE_BUCKET preview
+vercel env add VITE_FIREBASE_MESSAGING_SENDER_ID preview
+vercel env add VITE_FIREBASE_APP_ID preview
+```
+
+Keep `.env` and `.env.local` out of Git. Use `.env.example` as the committed template only.
 
 ## Firebase Rules
 
@@ -129,4 +151,13 @@ Firebase Console -> Firestore Database -> Rules -> Publish
 
 Current rules keep `users/{uid}/roomHistory` private to the same anonymous auth uid. Room documents are still collaboratively writable by signed-in users because the current app has no server-side arbiter. Strict anti-cheat, server-side dealing, or fully private per-player hands should be handled in a later backend-backed version.
 
-Rules automation can be added later with GitHub Actions, but only after Firebase credentials or Workload Identity are configured as GitHub repository secrets. Do not commit Firebase service-account credentials to the repository.
+Rules automation is scaffolded in `.github/workflows/firebase-rules.yml`. It deploys only when `firestore.rules`, `firebase.json`, or the workflow itself changes, and it safely skips itself if secrets are not configured.
+
+Required GitHub repository secrets:
+
+```text
+FIREBASE_PROJECT_ID
+FIREBASE_SERVICE_ACCOUNT_JSON
+```
+
+`FIREBASE_SERVICE_ACCOUNT_JSON` should be the full JSON content of a Firebase service account with permission to deploy Firestore rules. Do not commit Firebase service-account credentials to the repository.

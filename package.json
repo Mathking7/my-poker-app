@@ -21,6 +21,7 @@
     "smoke:room-personal-history": "node scripts/smoke/room-personal-history-smoke.mjs",
     "smoke:room-create-isolation": "node scripts/smoke/room-create-isolation-smoke.mjs",
     "smoke:transition": "node scripts/smoke/transition-layout-smoke.mjs",
+    "verify:prod": "node scripts/verify-production.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

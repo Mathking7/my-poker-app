@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run lint && npm run test:logic && npm run build",
+  "ignoreCommand": "node scripts/vercel-ignore-build.mjs",
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
