@@ -175,4 +175,13 @@ staging: mypoker-staging
 production: mypoker-e6f9c
 ```
 
-Each `*_SERVICE_ACCOUNT_JSON` secret should be the full JSON content of a Firebase service account with permission to deploy Firestore rules for that Firebase project. Do not commit Firebase service-account credentials to the repository.
+Each `*_SERVICE_ACCOUNT_JSON` secret should be the full JSON content of a Firebase service account for that Firebase project. Do not commit Firebase service-account credentials to the repository.
+
+Required IAM roles for each service account:
+
+```text
+Firebase Rules Admin
+Service Usage Viewer
+```
+
+`Firebase Rules Admin` allows publishing security rules. `Service Usage Viewer` is also required because Firebase CLI checks whether `firestore.googleapis.com` is enabled before releasing the rules.

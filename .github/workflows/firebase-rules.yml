@@ -13,8 +13,7 @@ on:
 permissions:
   contents: read
 
-# Firebase rules are deployed by GitHub Actions because Vercel only builds the static app.
-# Manual verification trigger after IAM permission updates.
+# GitHub Actions publishes Firestore rules because Vercel only builds the static app.
 jobs:
   deploy-firestore-rules:
     runs-on: ubuntu-latest
