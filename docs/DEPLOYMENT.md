@@ -112,25 +112,33 @@ npm run verify:prod
 
 The current production app points at the Firebase project configured by `VITE_FIREBASE_*`. Vercel Preview deployments should ideally use a separate staging Firebase project so test rooms and smoke data do not enter the production Firestore database.
 
+Current environment split:
+
+```text
+Production / Development: mypoker-e6f9c
+Preview: mypoker-staging
+```
+
 Recommended setup when a staging Firebase project is available:
 
 1. Create a second Firebase project for staging.
 2. Enable Anonymous Authentication and Firestore in that project.
-3. In Vercel, set the staging `VITE_FIREBASE_*` values for the Preview environment.
-4. Keep the current production Firebase values only in the Production environment.
+3. In Vercel, keep production Firebase values scoped to Production and Development.
+4. Add a second copy of the same `VITE_FIREBASE_*` keys scoped only to Preview, using staging Firebase values.
 5. Deploy `firestore.rules` to both Firebase projects whenever rules change.
 
 Do not change production environment variables until the staging project has been tested with `smoke:quick` and `smoke:ai-single-action`.
 
-Suggested Vercel CLI flow after the staging Firebase web app exists:
+Avoid `vercel env update VITE_FIREBASE_PROJECT_ID preview` when the existing variable is shared by Production, Preview, and Development. In that case the CLI may update the shared record instead of creating a Preview-only override. Use the Vercel dashboard, or split the shared records through the Vercel API:
 
 ```powershell
-vercel env add VITE_FIREBASE_API_KEY preview
-vercel env add VITE_FIREBASE_AUTH_DOMAIN preview
-vercel env add VITE_FIREBASE_PROJECT_ID preview
-vercel env add VITE_FIREBASE_STORAGE_BUCKET preview
-vercel env add VITE_FIREBASE_MESSAGING_SENDER_ID preview
-vercel env add VITE_FIREBASE_APP_ID preview
+$project='prj_bvkBQAAr5knWzs8aDv7e5vx8wNSn'
+$scope='yuxuan-zhengs-projects'
+
+# 1. PATCH each existing shared env record to target only Production + Development.
+# 2. POST a new env record with the same key, target ['preview'], and the staging value.
+vercel api "/v9/projects/$project/env/<env-id>" --scope $scope -X PATCH --input body.json
+vercel api "/v10/projects/$project/env" --scope $scope -X POST --input body.json
 ```
 
 Keep `.env` and `.env.local` out of Git. Use `.env.example` as the committed template only.
