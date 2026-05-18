@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 export const smokeConfig = {
   baseUrl: process.env.SMOKE_BASE_URL || 'http://127.0.0.1:5173/',
   browserPath: process.env.SMOKE_BROWSER_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  outputDir: process.env.SMOKE_OUTPUT_DIR || 'D:\\codexroot',
+  outputDir: process.env.SMOKE_OUTPUT_DIR || 'D:\\codexroot\\my-poker-app-artifacts\\smoke',
   authWaitMs: Number(process.env.SMOKE_AUTH_WAIT_MS || 20_000),
   actionTimeoutMs: Number(process.env.SMOKE_ACTION_TIMEOUT_MS || 40_000),
 };

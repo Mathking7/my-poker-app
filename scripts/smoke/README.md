@@ -24,7 +24,7 @@ Environment knobs:
 
 ```powershell
 $env:SMOKE_BASE_URL='http://127.0.0.1:5173/'
-$env:SMOKE_OUTPUT_DIR='D:\codexroot'
+$env:SMOKE_OUTPUT_DIR='D:\codexroot\my-poker-app-artifacts\smoke'
 $env:SMOKE_BROWSER_PATH='C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $env:NODE_PATH='C:\Users\26808\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules'
 ```
